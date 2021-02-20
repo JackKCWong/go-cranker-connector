@@ -2,7 +2,6 @@ package connector
 
 import (
 	"crypto/tls"
-	"fmt"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -43,33 +42,12 @@ func (c *Connector) Connect(
 	c.routerURLs = routerURLs
 	c.targetURL = serviceURL
 	for i := 0; i < len(routerURLs); i++ {
-		headers := http.Header{}
-		headers.Add("CrankerProtocol", "1.0")
-		headers.Add("Route", serviceName)
-		conn, resp, err := c.dialer.Dial(
-			fmt.Sprintf("%s/%s", routerURLs[i], "register"),
-			headers)
-
-		if resp != nil {
-			log.Debug().
-				Str("status", resp.Status).
-				Send()
-		}
-
-		if err != nil {
-			log.Error().
-				Str("router", routerURLs[i]).
-				Str("error", err.Error()).
-				Msg("failed to connect to cranker router")
-
-			return err
-		}
-
 		cs := connectorSocket{
-			routerURL:  routerURLs[i],
-			targetURL:  serviceURL,
-			wss:        conn,
-			httpClient: c.httpClient,
+			routerURL:   routerURLs[i],
+			targetURL:   serviceURL,
+			httpClient:  c.httpClient,
+			dialer:      c.dialer,
+			serviceName: serviceName,
 		}
 
 		go cs.start()
@@ -80,5 +58,8 @@ func (c *Connector) Connect(
 
 // Destroy stops and clean up all sockets
 func (c *Connector) Destroy() error {
+	defer log.Info().Msg("connector destroyed")
+	log.Info().Msg("destroying connector")
+
 	return nil
 }

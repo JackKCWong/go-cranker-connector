@@ -3,6 +3,8 @@ package connector
 import (
 	"bufio"
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -12,19 +14,52 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-
 type connectorSocket struct {
-	routerURL  string
-	targetURL  string
-	wss        *websocket.Conn
-	httpClient *http.Client
+	routerURL   string
+	serviceName string
+	targetURL   string
+	wss         *websocket.Conn
+	dialer      *websocket.Dialer
+	httpClient  *http.Client
 }
 
-func (s *connectorSocket) start() error {
-	log.Info().
-		Str("router", s.routerURL).
-		Str("service", s.targetURL).
-		Msg("wss socket starting")
+func (s *connectorSocket) close() error {
+	if s.wss != nil {
+		return s.wss.Close()
+	}
+
+	return nil
+}
+
+func (s *connectorSocket) dial() error {
+	if s.dialer == nil {
+		return errors.New("dialer is nil. Has the socket been initialized properly?")
+	}
+
+	headers := http.Header{}
+	headers.Add("CrankerProtocol", "1.0")
+	headers.Add("Route", s.serviceName)
+
+	conn, resp, err := s.dialer.Dial(
+		fmt.Sprintf("%s/%s", s.routerURL, "register"),
+		headers)
+
+	if resp != nil {
+		log.Debug().
+			Str("status", resp.Status).
+			Send()
+	}
+
+	if err != nil {
+		log.Error().
+			Str("router", s.routerURL).
+			Str("error", err.Error()).
+			Msg("failed to connect to cranker router")
+
+		return err
+	}
+
+	s.wss = conn
 
 	s.wss.SetPingHandler(func(appData string) error {
 		log.Debug().Str("ping:", appData).Send()
@@ -41,10 +76,16 @@ func (s *connectorSocket) start() error {
 		return nil
 	})
 
+	return nil
+}
+
+func (s *connectorSocket) start() error {
+	defer s.close()
+
 	log.Info().
 		Str("router", s.routerURL).
-		Str("target", s.targetURL).
-		Msg("wss socket started")
+		Str("service", s.targetURL).
+		Msg("socket starting")
 
 	serviceURL, err := url.Parse(s.targetURL)
 	if err != nil {
@@ -52,7 +93,18 @@ func (s *connectorSocket) start() error {
 		return err
 	}
 
-	log.Debug().Msg("waiting for message")
+	err = s.dial()
+
+	if err != nil {
+		log.Error().AnErr("dialErr", err).Send()
+		return err
+	}
+
+	log.Info().
+		Str("router", s.routerURL).
+		Str("target", s.targetURL).
+		Msg("socket started")
+
 	messageType, message, err := s.wss.ReadMessage()
 	if err != nil {
 		log.Error().AnErr("readMessageErr", err).Send()
@@ -92,8 +144,6 @@ func (s *connectorSocket) start() error {
 		log.Error().AnErr("writeRespErr", err).Send()
 		return err
 	}
-
-	s.wss.Close()
 
 	return nil
 }
