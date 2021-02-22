@@ -43,14 +43,18 @@ func TestCanConnect(t *testing.T) {
 		Transport: &http.Transport{TLSClientConfig: tlsConfig},
 		Timeout:   1 * time.Second,
 	}
-	resp, err := hc.Get("https://localhost:8443/hello")
 
-	assert.Nilf(err, "failed to request to cranker")
+	// proving there are 2 connector sockets
+	for i := 0; i < 2; i++ {
+		resp, err := hc.Get("https://localhost:8443/hello")
 
-	assert.Equal("200 OK", resp.Status)
-	defer resp.Body.Close()
+		assert.Nilf(err, "failed to request to cranker")
 
-	body, err := ioutil.ReadAll(resp.Body)
-	assert.Nilf(err, "failed to read resp from cranker")
-	assert.Equal("hello world\n", string(body))
+		assert.Equal("200 OK", resp.Status)
+		defer resp.Body.Close()
+
+		body, err := ioutil.ReadAll(resp.Body)
+		assert.Nilf(err, "failed to read resp from cranker")
+		assert.Equal("hello world\n", string(body))
+	}
 }

@@ -44,19 +44,21 @@ func (c *Connector) Connect(
 	c.routerURLs = routerURLs
 	c.targetURL = serviceURL
 	for i := 0; i < len(routerURLs); i++ {
-		cs := connectorSocket{
-			routerURL:   routerURLs[i],
-			targetURL:   serviceURL,
-			httpClient:  c.httpClient,
-			dialer:      c.dialer,
-			serviceName: serviceName,
-		}
+		for j := 0; j < slidingWindow; j++ {
+			cs := connectorSocket{
+				routerURL:   routerURLs[i],
+				targetURL:   serviceURL,
+				httpClient:  c.httpClient,
+				dialer:      c.dialer,
+				serviceName: serviceName,
+			}
 
-		c.wgSockets.Add(1)
-		go func() {
-			defer c.wgSockets.Done()
-			cs.start()
-		}()
+			c.wgSockets.Add(1)
+			go func() {
+				defer c.wgSockets.Done()
+				cs.start()
+			}()
+		}
 	}
 
 	c.wgSockets.Wait()
