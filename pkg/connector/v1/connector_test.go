@@ -52,5 +52,5 @@ func TestCanConnect(t *testing.T) {
 
 	body, err := ioutil.ReadAll(resp.Body)
 	assert.Nilf(err, "failed to read resp from cranker")
-	assert.Equal("hello world", string(body))
+	assert.Equal("hello world\n", string(body))
 }

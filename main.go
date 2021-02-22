@@ -3,7 +3,7 @@ package main
 import (
 	"time"
 
-	"github.com/go-cranker/pkg/connector"
+	"github.com/go-cranker/pkg/connector/v1"
 	"github.com/rs/zerolog/log"
 )	
 

@@ -6,13 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
+	"strings"
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 )
+
+const marker_req_has_body = "_1"
+const marker_req_has_no_body = "_2"
+const marker_req_body_ended = "_3"
 
 type connectorSocket struct {
 	routerURL   string
@@ -73,7 +78,11 @@ func (s *connectorSocket) dial() error {
 	})
 
 	s.wss.SetCloseHandler(func(code int, text string) error {
-		log.Info().Int("code", code).Str("text", text).Str("uri", s.routerURL).Msg("wss closed")
+		log.Info().Int("code", code).
+			Str("text", text).
+			Str("url", s.routerURL).
+			Msg("wss closed")
+
 		return nil
 	})
 
@@ -114,11 +123,24 @@ func (s *connectorSocket) waitForRequest() error {
 
 	log.Debug().
 		Int("type", messageType).
-		Bytes("recv", message).
-		Send()
+		Bytes("payload", message).
+		Msg("message received")
 
-	buf := bytes.NewBuffer(message)
-	req, err := http.ReadRequest(bufio.NewReader(buf))
+	if messageType != websocket.TextMessage {
+		err := errors.New("INVALID_PROTOCOL")
+		log.Error().
+			AnErr("err", err).
+			Msg("expecting a text message as request headers")
+
+		return err
+	}
+
+	var buf bytes.Buffer
+	if strings.HasSuffix(string(message), marker_req_has_no_body) {
+		buf.Write(message[0 : len(message)-2])
+	}
+
+	req, err := http.ReadRequest(bufio.NewReader(&buf))
 
 	if err != nil && err != io.EOF {
 		log.Error().AnErr("readRequestErr", err).Send()
@@ -142,7 +164,19 @@ func (s *connectorSocket) waitForRequest() error {
 		return err
 	}
 
-	respDump, err := httputil.DumpResponse(resp, true)
+	defer resp.Body.Close()
+
+	var headerBuf bytes.Buffer
+	fmt.Fprintf(&headerBuf, "%s %s\n", resp.Proto, resp.Status)
+	resp.Header.Write(&headerBuf)
+	log.Debug().Bytes("respHeader", headerBuf.Bytes()).Msg("sending response headers")
+	err = s.wss.WriteMessage(websocket.TextMessage, headerBuf.Bytes())
+
+	respDump, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Error().AnErr("doResponseErr", err).Send()
+		return err
+	}
 
 	log.Debug().Bytes("resp", respDump).Msg("sending response")
 	err = s.wss.WriteMessage(websocket.BinaryMessage, respDump)
