@@ -3,6 +3,7 @@ package connector
 import (
 	"crypto/tls"
 	"net/http"
+	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
@@ -14,6 +15,7 @@ type Connector struct {
 	targetURL  string
 	dialer     *websocket.Dialer
 	httpClient *http.Client
+	wgSockets  sync.WaitGroup
 }
 
 // NewConnector returns a new Connector
@@ -50,8 +52,14 @@ func (c *Connector) Connect(
 			serviceName: serviceName,
 		}
 
-		go cs.start()
+		c.wgSockets.Add(1)
+		go func() {
+			defer c.wgSockets.Done()
+			cs.start()
+		}()
 	}
+
+	c.wgSockets.Wait()
 
 	return nil
 }

@@ -33,12 +33,10 @@ func TestCanConnect(t *testing.T) {
 
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
 	connector := NewConnectorWithConfig(tlsConfig)
-	err := connector.Connect([]string{"wss://0.0.0.0:16489"}, 1, "hello", testServer.URL)
+	err := connector.Connect([]string{"wss://0.0.0.0:16489"}, 2, "hello", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
 	defer connector.Destroy()
-
-	time.Sleep(1 * time.Second)
 
 	log.Debug().Msg("sending test request")
 	hc := http.Client{

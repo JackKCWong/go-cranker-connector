@@ -47,7 +47,8 @@ func (s *connectorSocket) dial() error {
 	if resp != nil {
 		log.Debug().
 			Str("status", resp.Status).
-			Send()
+			Str("url", s.routerURL).
+			Msg("wss connected")
 	}
 
 	if err != nil {
@@ -80,30 +81,30 @@ func (s *connectorSocket) dial() error {
 }
 
 func (s *connectorSocket) start() error {
-	defer s.close()
-
 	log.Info().
 		Str("router", s.routerURL).
 		Str("service", s.targetURL).
 		Msg("socket starting")
 
-	serviceURL, err := url.Parse(s.targetURL)
-	if err != nil {
-		log.Error().AnErr("urlErr", err).Send()
-		return err
-	}
-
-	err = s.dial()
+	err := s.dial()
 
 	if err != nil {
 		log.Error().AnErr("dialErr", err).Send()
 		return err
 	}
 
+	go s.waitForRequest()
+
 	log.Info().
 		Str("router", s.routerURL).
 		Str("target", s.targetURL).
 		Msg("socket started")
+
+	return nil
+}
+
+func (s *connectorSocket) waitForRequest() error {
+	defer s.close()
 
 	messageType, message, err := s.wss.ReadMessage()
 	if err != nil {
@@ -121,6 +122,12 @@ func (s *connectorSocket) start() error {
 
 	if err != nil && err != io.EOF {
 		log.Error().AnErr("readRequestErr", err).Send()
+		return err
+	}
+
+	serviceURL, err := url.Parse(s.targetURL)
+	if err != nil {
+		log.Error().AnErr("urlErr", err).Send()
 		return err
 	}
 
