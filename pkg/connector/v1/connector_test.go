@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io/ioutil"
@@ -46,7 +47,7 @@ func TestCanConnect(t *testing.T) {
 
 	// proving there are 2 connector sockets
 	for i := 0; i < 2; i++ {
-		resp, err := hc.Get("https://localhost:8443/hello")
+		resp, err := hc.Post("https://localhost:8443/hello", "text/plain", bytes.NewBufferString("world"))
 
 		assert.Nilf(err, "failed to request to cranker")
 

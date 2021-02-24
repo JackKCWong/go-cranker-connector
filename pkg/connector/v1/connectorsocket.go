@@ -15,9 +15,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const marker_req_has_body = "_1"
-const marker_req_has_no_body = "_2"
-const marker_req_body_ended = "_3"
+const markerReqBodyPending = "_1"
+const markerReqHasNoBody = "_2"
+const markerReqBodyEnded = "_3"
 
 type connectorSocket struct {
 	routerURL   string
@@ -89,7 +89,9 @@ func (s *connectorSocket) dial() error {
 	return nil
 }
 
-func (s *connectorSocket) start() error {
+func (s *connectorSocket) restart() error {
+	s.close()
+
 	log.Info().
 		Str("router", s.routerURL).
 		Str("service", s.targetURL).
@@ -112,40 +114,104 @@ func (s *connectorSocket) start() error {
 	return nil
 }
 
+func (s *connectorSocket) readRequest() (*http.Request, error) {
+	messageType, message, err := s.wss.NextReader()
+	if err != nil {
+		log.Error().AnErr("err", err).Msg("error reading request headers")
+		return nil, err
+	}
+
+	if messageType != websocket.TextMessage {
+		log.Error().
+			Str("expectedMessageType", "textMessage").
+			Str("actualMessageType", "binaryMessage").
+			Msg("protocal error")
+
+		return nil, err
+	}
+
+	buf := make([]byte, 16*1024)
+	n, err := message.Read(buf)
+	if err != nil && err != io.EOF {
+		log.Error().AnErr("err", err).Msg("error reading request headers")
+		return nil, err
+	}
+
+	reader := bufio.NewReader(bytes.NewReader(buf))
+	firstline, err := reader.ReadString('\n')
+	if err != nil {
+		log.Error().AnErr("err", err).Msg("error reading 1st line in request")
+		return nil, err
+	}
+
+	method, url := decomposeMethodAndURL(firstline)
+
+	var req *http.Request
+	if bytes.Compare(buf[n-2:n], []byte(markerReqHasNoBody)) == 0 {
+		req, err = http.NewRequest(method, url, nil)
+	} else {
+		r, w := io.Pipe()
+		req, err = http.NewRequest(method, url, r)
+		go drainRequestBody(s.wss, w, buf)
+	}
+
+	if err != nil {
+		log.Error().AnErr("err", err).Msg("error creating request")
+		return nil, err
+	}
+
+	return req, nil
+}
+
+func drainRequestBody(wss *websocket.Conn, out *io.PipeWriter, buf []byte) error {
+	for {
+		log.Debug().Msg("draining request body")
+		messageType, message, err := wss.NextReader()
+		if err != nil {
+			return err
+		}
+
+		switch messageType {
+		case websocket.BinaryMessage:
+			n, err := io.Copy(out, message)
+			if err != nil {
+				return err
+			}
+
+			log.Debug().Int64("bytesSent", n).Msg("sending request body")
+			out.Close()
+			return nil
+		case websocket.TextMessage:
+			n, err := message.Read(buf)
+			if err != nil || err != io.EOF {
+				return err
+			}
+
+			log.Debug().
+				Bytes("recv", buf[0:n]).
+				Msg("expecting a marker")
+
+			if n > 2 {
+				continue
+			}
+
+			if bytes.Compare([]byte(markerReqBodyEnded), buf[0:2]) == 0 {
+				out.Close()
+				return nil
+			}
+		}
+	}
+}
+
+func decomposeMethodAndURL(line string) (string, string) {
+	parts := strings.Split(line, " ")
+	return parts[0], parts[1]
+}
+
 func (s *connectorSocket) waitForRequest() error {
 	defer s.close()
 
-	messageType, message, err := s.wss.ReadMessage()
-	if err != nil {
-		log.Error().AnErr("readMessageErr", err).Send()
-		return err
-	}
-
-	log.Debug().
-		Int("type", messageType).
-		Bytes("payload", message).
-		Msg("message received")
-
-	if messageType != websocket.TextMessage {
-		err := errors.New("INVALID_PROTOCOL")
-		log.Error().
-			AnErr("err", err).
-			Msg("expecting a text message as request headers")
-
-		return err
-	}
-
-	var buf bytes.Buffer
-	if strings.HasSuffix(string(message), marker_req_has_no_body) {
-		buf.Write(message[0 : len(message)-2])
-	}
-
-	req, err := http.ReadRequest(bufio.NewReader(&buf))
-
-	if err != nil && err != io.EOF {
-		log.Error().AnErr("readRequestErr", err).Send()
-		return err
-	}
+	req, err := s.readRequest()
 
 	serviceURL, err := url.Parse(s.targetURL)
 	if err != nil {

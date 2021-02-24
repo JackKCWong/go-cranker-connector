@@ -56,7 +56,7 @@ func (c *Connector) Connect(
 			c.wgSockets.Add(1)
 			go func() {
 				defer c.wgSockets.Done()
-				cs.start()
+				cs.restart()
 			}()
 		}
 	}
