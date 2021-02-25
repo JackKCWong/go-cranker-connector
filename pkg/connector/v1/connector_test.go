@@ -18,44 +18,97 @@ import (
 	"time"
 )
 
-func init() {
+func setupLogger() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 }
 
-func TestCanConnect(t *testing.T) {
-	assert := assert.New(t)
+func setupTestServer() *httptest.Server {
 	testServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "hello world")
+		log.Info().Str("url", r.URL.Path).Msg("received request\n")
+		defer r.Body.Close()
+
+		switch r.URL.Path {
+		case "/get":
+			fmt.Fprint(w, "world")
+		case "/post":
+			body, err := ioutil.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(500)
+				log.Info().Msg("error reading request body\n")
+			}
+
+			n, err := w.Write(body)
+			if err != nil {
+				log.Error().AnErr("err", err).Msg("error sending test resp")
+				return
+			}
+
+			log.Info().Int("bytesSent", n).Msg("test resp sent")
+		}
 	}))
 
-	defer testServer.Close()
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
+	return testServer
+}
 
+var testServer *httptest.Server
+
+func TestMain(t *testing.M) {
+	setupLogger()
+	testServer = setupTestServer()
+	defer testServer.Close()
+
+	t.Run()
+}
+
+func TestCanHandlerGetRequest(t *testing.T) {
+	assert := assert.New(t)
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
 	connector := NewConnectorWithConfig(tlsConfig)
-	err := connector.Connect([]string{"wss://0.0.0.0:16489"}, 2, "hello", testServer.URL)
+	err := connector.Connect([]string{"wss://0.0.0.0:16489"}, 1, "test1", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
 	defer connector.Destroy()
 
-	log.Debug().Msg("sending test request")
+	t.Log("sending test request")
 	hc := http.Client{
 		Transport: &http.Transport{TLSClientConfig: tlsConfig},
 		Timeout:   1 * time.Second,
 	}
 
-	// proving there are 2 connector sockets
-	for i := 0; i < 2; i++ {
-		resp, err := hc.Post("https://localhost:8443/hello", "text/plain", bytes.NewBufferString("world"))
+	resp, err := hc.Get("https://localhost:8443/test1/get")
 
-		assert.Nilf(err, "failed to request to cranker")
+	assert.Nilf(err, "failed to request to cranker")
 
-		assert.Equal("200 OK", resp.Status)
-		defer resp.Body.Close()
+	defer resp.Body.Close()
+	assert.Equal("200 OK", resp.Status)
+}
 
-		body, err := ioutil.ReadAll(resp.Body)
-		assert.Nilf(err, "failed to read resp from cranker")
-		assert.Equal("hello world\n", string(body))
+func TestCanHandlerPostRequest(t *testing.T) {
+	assert := assert.New(t)
+	tlsConfig := &tls.Config{InsecureSkipVerify: true}
+	connector := NewConnectorWithConfig(tlsConfig)
+	err := connector.Connect([]string{"wss://0.0.0.0:16489"}, 1, "test2", testServer.URL)
+	assert.Nilf(err, "failed to connect to cranker")
+
+	defer connector.Destroy()
+
+	t.Log("sending test request")
+	hc := http.Client{
+		Transport: &http.Transport{TLSClientConfig: tlsConfig},
+		Timeout:   1 * time.Second,
 	}
+
+	resp, err := hc.Post("https://localhost:8443/test2/post",
+		"text/plain",
+		bytes.NewBufferString("world"))
+
+	assert.Nilf(err, "failed to request to cranker")
+
+	assert.Equal("200 OK", resp.Status)
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	assert.Nilf(err, "failed to read resp from cranker")
+	assert.Equal("world", string(body))
 }

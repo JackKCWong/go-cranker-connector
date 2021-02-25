@@ -26,6 +26,7 @@ type connectorSocket struct {
 	wss         *websocket.Conn
 	dialer      *websocket.Dialer
 	httpClient  *http.Client
+	buf 		[]byte
 }
 
 func (s *connectorSocket) close() error {
@@ -145,6 +146,7 @@ func (s *connectorSocket) readRequest() (*http.Request, error) {
 	}
 
 	method, url := decomposeMethodAndURL(firstline)
+	url = strings.TrimPrefix(url, "/" + s.serviceName)
 
 	var req *http.Request
 	if bytes.Compare(buf[n-2:n], []byte(markerReqHasNoBody)) == 0 {
@@ -152,7 +154,7 @@ func (s *connectorSocket) readRequest() (*http.Request, error) {
 	} else {
 		r, w := io.Pipe()
 		req, err = http.NewRequest(method, url, r)
-		go drainRequestBody(s.wss, w, buf)
+		go s.pumpRequestBody(w)
 	}
 
 	if err != nil {
@@ -163,10 +165,10 @@ func (s *connectorSocket) readRequest() (*http.Request, error) {
 	return req, nil
 }
 
-func drainRequestBody(wss *websocket.Conn, out *io.PipeWriter, buf []byte) error {
+func (s *connectorSocket) pumpRequestBody(out *io.PipeWriter) error {
 	for {
 		log.Debug().Msg("draining request body")
-		messageType, message, err := wss.NextReader()
+		messageType, message, err := s.wss.NextReader()
 		if err != nil {
 			return err
 		}
@@ -182,20 +184,20 @@ func drainRequestBody(wss *websocket.Conn, out *io.PipeWriter, buf []byte) error
 			out.Close()
 			return nil
 		case websocket.TextMessage:
-			n, err := message.Read(buf)
+			n, err := message.Read(s.buf)
 			if err != nil || err != io.EOF {
 				return err
 			}
 
 			log.Debug().
-				Bytes("recv", buf[0:n]).
+				Bytes("recv", s.buf[0:n]).
 				Msg("expecting a marker")
 
 			if n > 2 {
-				continue
+				log.Error().Msg("protocal error: not a marker")
 			}
 
-			if bytes.Compare([]byte(markerReqBodyEnded), buf[0:2]) == 0 {
+			if bytes.Compare([]byte(markerReqBodyEnded), s.buf[0:2]) == 0 {
 				out.Close()
 				return nil
 			}

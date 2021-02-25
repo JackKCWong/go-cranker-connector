@@ -51,6 +51,7 @@ func (c *Connector) Connect(
 				httpClient:  c.httpClient,
 				dialer:      c.dialer,
 				serviceName: serviceName,
+				buf: make([]byte, 16 * 1024),
 			}
 
 			c.wgSockets.Add(1)
