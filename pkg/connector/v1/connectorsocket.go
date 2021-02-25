@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,7 +25,7 @@ type connectorSocket struct {
 	wss         *websocket.Conn
 	dialer      *websocket.Dialer
 	httpClient  *http.Client
-	buf 		[]byte
+	buf         []byte
 }
 
 func (s *connectorSocket) close() error {
@@ -131,14 +130,13 @@ func (s *connectorSocket) readRequest() (*http.Request, error) {
 		return nil, err
 	}
 
-	buf := make([]byte, 16*1024)
-	n, err := message.Read(buf)
+	n, err := message.Read(s.buf)
 	if err != nil && err != io.EOF {
 		log.Error().AnErr("err", err).Msg("error reading request headers")
 		return nil, err
 	}
 
-	reader := bufio.NewReader(bytes.NewReader(buf))
+	reader := bufio.NewReader(bytes.NewReader(s.buf[0:n]))
 	firstline, err := reader.ReadString('\n')
 	if err != nil {
 		log.Error().AnErr("err", err).Msg("error reading 1st line in request")
@@ -146,10 +144,10 @@ func (s *connectorSocket) readRequest() (*http.Request, error) {
 	}
 
 	method, url := decomposeMethodAndURL(firstline)
-	url = strings.TrimPrefix(url, "/" + s.serviceName)
+	url = strings.TrimPrefix(url, "/"+s.serviceName)
 
 	var req *http.Request
-	if bytes.Compare(buf[n-2:n], []byte(markerReqHasNoBody)) == 0 {
+	if bytes.Compare(s.buf[n-2:n], []byte(markerReqHasNoBody)) == 0 {
 		req, err = http.NewRequest(method, url, nil)
 	} else {
 		r, w := io.Pipe()
@@ -232,27 +230,32 @@ func (s *connectorSocket) waitForRequest() error {
 		return err
 	}
 
-	defer resp.Body.Close()
+	return s.pumpResponse(resp)
+}
 
+func (s *connectorSocket) pumpResponse(resp *http.Response) error {
+	defer resp.Body.Close()
 	var headerBuf bytes.Buffer
-	fmt.Fprintf(&headerBuf, "%s %s\n", resp.Proto, resp.Status)
+	fmt.Fprintf(&headerBuf, "%s %s\r\n", resp.Proto, resp.Status)
 	resp.Header.Write(&headerBuf)
 	log.Debug().Bytes("respHeader", headerBuf.Bytes()).Msg("sending response headers")
-	err = s.wss.WriteMessage(websocket.TextMessage, headerBuf.Bytes())
+	err := s.wss.WriteMessage(websocket.TextMessage, headerBuf.Bytes())
 
-	respDump, err := ioutil.ReadAll(resp.Body)
+	w, err := s.wss.NextWriter(websocket.BinaryMessage)
 	if err != nil {
-		log.Error().AnErr("doResponseErr", err).Send()
+		log.Error().AnErr("writeRespErr", err).Msg("error creating resp writer")
 		return err
 	}
 
-	log.Debug().Bytes("resp", respDump).Msg("sending response")
-	err = s.wss.WriteMessage(websocket.BinaryMessage, respDump)
+	defer w.Close()
+	n, err := io.Copy(w, resp.Body)
 
 	if err != nil {
 		log.Error().AnErr("writeRespErr", err).Send()
 		return err
 	}
+
+	log.Debug().Int64("bytesSent", n).Msg("response sent")
 
 	return nil
 }

@@ -24,8 +24,9 @@ func setupLogger() {
 }
 
 func setupTestServer() *httptest.Server {
+	tlog := log.With().Str("src", "testServer").Logger()
 	testServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Info().Str("url", r.URL.Path).Msg("received request\n")
+		tlog.Info().Str("url", r.URL.Path).Msg("received request")
 		defer r.Body.Close()
 
 		switch r.URL.Path {
@@ -35,16 +36,16 @@ func setupTestServer() *httptest.Server {
 			body, err := ioutil.ReadAll(r.Body)
 			if err != nil {
 				w.WriteHeader(500)
-				log.Info().Msg("error reading request body\n")
+				tlog.Info().Msg("error reading request body\n")
 			}
 
 			n, err := w.Write(body)
 			if err != nil {
-				log.Error().AnErr("err", err).Msg("error sending test resp")
+				tlog.Error().AnErr("err", err).Msg("error sending test resp")
 				return
 			}
 
-			log.Info().Int("bytesSent", n).Msg("test resp sent")
+			tlog.Info().Int("bytesSent", n).Msg("test resp sent")
 		}
 	}))
 
@@ -70,7 +71,6 @@ func TestCanHandlerGetRequest(t *testing.T) {
 
 	defer connector.Destroy()
 
-	t.Log("sending test request")
 	hc := http.Client{
 		Transport: &http.Transport{TLSClientConfig: tlsConfig},
 		Timeout:   1 * time.Second,
@@ -93,7 +93,6 @@ func TestCanHandlerPostRequest(t *testing.T) {
 
 	defer connector.Destroy()
 
-	t.Log("sending test request")
 	hc := http.Client{
 		Transport: &http.Transport{TLSClientConfig: tlsConfig},
 		Timeout:   1 * time.Second,
@@ -108,6 +107,7 @@ func TestCanHandlerPostRequest(t *testing.T) {
 	assert.Equal("200 OK", resp.Status)
 	defer resp.Body.Close()
 
+	time.Sleep(500 * time.Millisecond)
 	body, err := ioutil.ReadAll(resp.Body)
 	assert.Nilf(err, "failed to read resp from cranker")
 	assert.Equal("world", string(body))
