@@ -69,7 +69,7 @@ func TestCanHandlerGetRequest(t *testing.T) {
 	err := connector.Connect([]string{"wss://0.0.0.0:16489"}, 1, "test1", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
-	defer connector.Destroy()
+	defer connector.Shutdown()
 
 	hc := http.Client{
 		Transport: &http.Transport{TLSClientConfig: tlsConfig},
@@ -91,7 +91,7 @@ func TestCanHandlerPostRequest(t *testing.T) {
 	err := connector.Connect([]string{"wss://0.0.0.0:16489"}, 1, "test2", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
-	defer connector.Destroy()
+	defer connector.Shutdown()
 
 	hc := http.Client{
 		Transport: &http.Transport{TLSClientConfig: tlsConfig},

@@ -67,8 +67,8 @@ func (c *Connector) Connect(
 	return nil
 }
 
-// Destroy stops and clean up all sockets
-func (c *Connector) Destroy() error {
+// Shutdown stops and clean up all sockets
+func (c *Connector) Shutdown() error {
 	defer log.Info().Msg("connector destroyed")
 	log.Info().Msg("destroying connector")
 

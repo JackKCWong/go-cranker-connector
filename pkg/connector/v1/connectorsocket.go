@@ -173,7 +173,7 @@ func (s *connectorSocket) pumpRequestBody(out *io.PipeWriter) error {
 
 		switch messageType {
 		case websocket.BinaryMessage:
-			n, err := io.Copy(out, message)
+			n, err := io.CopyBuffer(out, message, s.buf)
 			if err != nil {
 				return err
 			}
@@ -212,6 +212,10 @@ func (s *connectorSocket) waitForRequest() error {
 	defer s.close()
 
 	req, err := s.readRequest()
+	if err != nil {
+		log.Error().AnErr("reqErr", err).Msg("error waiting for request")
+		return err
+	}
 
 	serviceURL, err := url.Parse(s.targetURL)
 	if err != nil {
@@ -248,7 +252,7 @@ func (s *connectorSocket) pumpResponse(resp *http.Response) error {
 	}
 
 	defer w.Close()
-	n, err := io.Copy(w, resp.Body)
+	n, err := io.CopyBuffer(w, resp.Body, s.buf)
 
 	if err != nil {
 		log.Error().AnErr("writeRespErr", err).Send()
