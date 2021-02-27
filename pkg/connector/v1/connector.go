@@ -3,6 +3,7 @@ package connector
 import (
 	"crypto/tls"
 	"net/http"
+	"net/url"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -11,11 +12,10 @@ import (
 
 // Connector connects the local service to crankers
 type Connector struct {
-	routerURLs []string
-	targetURL  string
+	routerURLs []*url.URL
+	targetURL  *url.URL  
 	dialer     *websocket.Dialer
 	httpClient *http.Client
-	wgSockets  sync.WaitGroup
 }
 
 // NewConnector returns a new Connector
@@ -41,28 +41,45 @@ func NewConnectorWithConfig(tlsConfig *tls.Config) *Connector {
 func (c *Connector) Connect(
 	routerURLs []string, slidingWindow int,
 	serviceName string, serviceURL string) error {
-	c.routerURLs = routerURLs
-	c.targetURL = serviceURL
-	for i := 0; i < len(routerURLs); i++ {
+
+	var err error
+	c.targetURL, err = url.Parse(serviceURL)
+
+	if err != nil {
+		return err
+	}
+
+	noOfRouterURLs := len(routerURLs)
+	c.routerURLs = make([]*url.URL, noOfRouterURLs)
+	for i := 0; i < noOfRouterURLs; i++ {
+		c.routerURLs[i], err = url.Parse(routerURLs[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	var wgSockets sync.WaitGroup
+
+	for i := 0; i < noOfRouterURLs; i++ {
 		for j := 0; j < slidingWindow; j++ {
 			cs := connectorSocket{
-				routerURL:   routerURLs[i],
-				targetURL:   serviceURL,
+				routerURL:   c.routerURLs[i].String(),
+				targetURL:   c.targetURL.String(),
 				httpClient:  c.httpClient,
 				dialer:      c.dialer,
 				serviceName: serviceName,
 				buf: make([]byte, 16 * 1024),
 			}
 
-			c.wgSockets.Add(1)
+			wgSockets.Add(1)
 			go func() {
-				defer c.wgSockets.Done()
-				cs.restart()
+				defer wgSockets.Done()
+				cs.start()
 			}()
 		}
 	}
 
-	c.wgSockets.Wait()
+	wgSockets.Wait()
 
 	return nil
 }

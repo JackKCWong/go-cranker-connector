@@ -89,7 +89,7 @@ func (s *connectorSocket) dial() error {
 	return nil
 }
 
-func (s *connectorSocket) restart() error {
+func (s *connectorSocket) start() error {
 	s.close()
 
 	log.Info().
@@ -100,7 +100,7 @@ func (s *connectorSocket) restart() error {
 	err := s.dial()
 
 	if err != nil {
-		log.Error().AnErr("dialErr", err).Send()
+		log.Error().AnErr("err", err).Msg("error dialing")
 		return err
 	}
 
