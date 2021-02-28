@@ -29,6 +29,11 @@ type connectorSocket struct {
 }
 
 func (s *connectorSocket) close() error {
+	log.Debug().
+		Str("service", s.serviceName).
+		Str("router", s.routerURL).
+		Msg("closing connector socket")
+
 	if s.wss != nil {
 		return s.wss.Close()
 	}
@@ -90,8 +95,6 @@ func (s *connectorSocket) dial() error {
 }
 
 func (s *connectorSocket) start() error {
-	s.close()
-
 	log.Info().
 		Str("router", s.routerURL).
 		Str("service", s.targetURL).
@@ -148,6 +151,7 @@ func (s *connectorSocket) readRequest() (*http.Request, error) {
 
 	var req *http.Request
 	if bytes.Compare(s.buf[n-2:n], []byte(markerReqHasNoBody)) == 0 {
+		log.Debug().Msg("request has no body")
 		req, err = http.NewRequest(method, url, nil)
 	} else {
 		r, w := io.Pipe()
@@ -192,12 +196,14 @@ func (s *connectorSocket) pumpRequestBody(out *io.PipeWriter) error {
 				Msg("expecting a marker")
 
 			if n > 2 {
-				log.Error().Msg("protocal error: not a marker")
+				log.Error().Msg("protocal error: market too large")
 			}
 
 			if bytes.Compare([]byte(markerReqBodyEnded), s.buf[0:2]) == 0 {
 				out.Close()
 				return nil
+			} else {
+				log.Error().Msg("protocal error: not a marker")
 			}
 		}
 	}
@@ -209,35 +215,40 @@ func decomposeMethodAndURL(line string) (string, string) {
 }
 
 func (s *connectorSocket) waitForRequest() error {
-	defer s.close()
-
 	req, err := s.readRequest()
 	if err != nil {
 		log.Error().AnErr("reqErr", err).Msg("error waiting for request")
 		return err
 	}
 
-	serviceURL, err := url.Parse(s.targetURL)
+	resp, err := s.doReq(req)
 	if err != nil {
-		log.Error().AnErr("urlErr", err).Send()
-		return err
-	}
-
-	req.URL = serviceURL.ResolveReference(req.URL)
-	req.RequestURI = ""
-
-	log.Debug().Str("url", req.URL.String()).Msg("prep req url")
-	resp, err := s.httpClient.Do(req)
-
-	if err != nil {
-		log.Error().AnErr("doRequestErr", err).Send()
+		log.Error().AnErr("reqErr", err).Msg("error sending request")
 		return err
 	}
 
 	return s.pumpResponse(resp)
 }
 
+func (s *connectorSocket) doReq(req *http.Request) (*http.Response, error) {
+	serviceURL, err := url.Parse(s.targetURL)
+	if err != nil {
+		log.Error().AnErr("urlErr", err).Send()
+		return nil, err
+	}
+
+	req.URL = serviceURL.ResolveReference(req.URL)
+	req.RequestURI = ""
+
+	log.Debug().
+		Str("url", req.URL.String()).
+		Msg("prep req url")
+
+	return s.httpClient.Do(req)
+}
+
 func (s *connectorSocket) pumpResponse(resp *http.Response) error {
+	defer s.close()
 	defer resp.Body.Close()
 	var headerBuf bytes.Buffer
 	fmt.Fprintf(&headerBuf, "%s %s\r\n", resp.Proto, resp.Status)

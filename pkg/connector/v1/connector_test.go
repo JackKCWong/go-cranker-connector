@@ -5,11 +5,13 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 
+	"github.com/go-cranker/internal/util"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/rs/zerolog"
@@ -25,9 +27,11 @@ func setupLogger() {
 
 func setupTestServer() *httptest.Server {
 	tlog := log.With().Str("src", "testServer").Logger()
-	testServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tlog.Info().Str("url", r.URL.Path).Msg("received request")
+	testServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+
+		tlog.Info().
+			Msg("received request")
 
 		switch r.URL.Path {
 		case "/get":
@@ -49,36 +53,64 @@ func setupTestServer() *httptest.Server {
 		}
 	}))
 
+	lsn, _ := net.Listen("tcp", "localhost:9999")
+	testServer.Listener.Close()
+	testServer.Listener = lsn
+
+	testServer.StartTLS()
+
 	return testServer
 }
 
-var testServer *httptest.Server
+var (
+	testServer    *httptest.Server
+	testClient            *http.Client
+	tlsSkipVerify *tls.Config
+)
 
 func TestMain(t *testing.M) {
 	setupLogger()
 	testServer = setupTestServer()
+
+	tlsSkipVerify = &tls.Config{InsecureSkipVerify: true}
+	testClient = &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: tlsSkipVerify,
+			Proxy:           util.OSHttpProxy(),
+		},
+		Timeout: 1 * time.Second,
+	}
+
 	defer testServer.Close()
 
 	t.Run()
 }
 
+func newConnector() *Connector {
+	return NewConnector(&RouterConfig{
+		TLSClientConfig: tlsSkipVerify,
+	}, &ServiceConfig{
+		HttpClient: &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: tlsSkipVerify,
+				// Proxy:           util.OSHttpProxy(),
+			},
+		},
+	})
+}
+
 func TestCanHandlerGetRequest(t *testing.T) {
 	assert := assert.New(t)
-	tlsConfig := &tls.Config{InsecureSkipVerify: true}
-	connector := NewConnectorWithConfig(tlsConfig)
-	err := connector.Connect([]string{"wss://0.0.0.0:16489"}, 1, "test1", testServer.URL)
+	connector := newConnector()
+	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test1", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
 	defer connector.Shutdown()
 
-	hc := http.Client{
-		Transport: &http.Transport{TLSClientConfig: tlsConfig},
-		Timeout:   1 * time.Second,
-	}
+	req, _ := http.NewRequest("GET", "https://localhost:8443/test1/get", nil)
+	resp, err := testClient.Do(req)
 
-	resp, err := hc.Get("https://localhost:8443/test1/get")
-
-	assert.Nilf(err, "failed to request to cranker")
+	assert.Nilf(err, "failed to request to cranker: %q", err)
 
 	defer resp.Body.Close()
 	assert.Equal("200 OK", resp.Status)
@@ -86,19 +118,13 @@ func TestCanHandlerGetRequest(t *testing.T) {
 
 func TestCanHandlerPostRequest(t *testing.T) {
 	assert := assert.New(t)
-	tlsConfig := &tls.Config{InsecureSkipVerify: true}
-	connector := NewConnectorWithConfig(tlsConfig)
-	err := connector.Connect([]string{"wss://0.0.0.0:16489"}, 1, "test2", testServer.URL)
+	connector := newConnector()
+	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test2", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
 	defer connector.Shutdown()
 
-	hc := http.Client{
-		Transport: &http.Transport{TLSClientConfig: tlsConfig},
-		Timeout:   1 * time.Second,
-	}
-
-	resp, err := hc.Post("https://localhost:8443/test2/post",
+	resp, err := testClient.Post("https://localhost:8443/test2/post",
 		"text/plain",
 		bytes.NewBufferString("world"))
 

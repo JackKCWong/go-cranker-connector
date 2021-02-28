@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
+	"github.com/go-cranker/internal/util"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 )
@@ -13,27 +15,30 @@ import (
 // Connector connects the local service to crankers
 type Connector struct {
 	routerURLs []*url.URL
-	targetURL  *url.URL  
+	targetURL  *url.URL
 	dialer     *websocket.Dialer
 	httpClient *http.Client
 }
 
-// NewConnector returns a new Connector
-func NewConnector() *Connector {
-	return &Connector{
-		dialer: &websocket.Dialer{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
+type RouterConfig struct {
+	TLSClientConfig *tls.Config
 }
 
+type ServiceConfig struct {
+	HttpClient *http.Client
+}
+
+// NewConnector returns a new Connector
 // NewConnectorWithConfig creates a Connector with custom config
-func NewConnectorWithConfig(tlsConfig *tls.Config) *Connector {
+func NewConnector(rc *RouterConfig, sc *ServiceConfig) *Connector {
 	return &Connector{
 		dialer: &websocket.Dialer{
-			TLSClientConfig: tlsConfig,
+			TLSClientConfig:  rc.TLSClientConfig,
+			Proxy:            util.OSHttpProxy(),
+			HandshakeTimeout: 5 * time.Second,
 		},
-		httpClient: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}},
+
+		httpClient: sc.HttpClient,
 	}
 }
 
@@ -68,7 +73,7 @@ func (c *Connector) Connect(
 				httpClient:  c.httpClient,
 				dialer:      c.dialer,
 				serviceName: serviceName,
-				buf: make([]byte, 16 * 1024),
+				buf:         make([]byte, 16*1024),
 			}
 
 			wgSockets.Add(1)
