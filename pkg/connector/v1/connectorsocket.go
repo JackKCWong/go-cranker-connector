@@ -139,6 +139,8 @@ func (s *connectorSocket) readRequest() (*http.Request, error) {
 		return nil, err
 	}
 
+	log.Debug().Bytes("recv", s.buf[0:n]).Msg("wss msg received")
+
 	reader := bufio.NewReader(bytes.NewReader(s.buf[0:n]))
 	firstline, err := reader.ReadString('\n')
 	if err != nil {
@@ -183,27 +185,24 @@ func (s *connectorSocket) pumpRequestBody(out *io.PipeWriter) error {
 			}
 
 			log.Debug().Int64("bytesSent", n).Msg("sending request body")
-			out.Close()
-			return nil
 		case websocket.TextMessage:
 			n, err := message.Read(s.buf)
-			if err != nil || err != io.EOF {
-				return err
-			}
 
 			log.Debug().
 				Bytes("recv", s.buf[0:n]).
 				Msg("expecting a marker")
 
-			if n > 2 {
-				log.Error().Msg("protocal error: market too large")
+			if n == 2 {
+				if bytes.Compare([]byte(markerReqBodyEnded), s.buf[0:2]) == 0 {
+					out.Close()
+					return nil
+				}
 			}
 
-			if bytes.Compare([]byte(markerReqBodyEnded), s.buf[0:2]) == 0 {
-				out.Close()
-				return nil
-			} else {
-				log.Error().Msg("protocal error: not a marker")
+			log.Error().Bytes("recv", s.buf[0:n]).Msg("protocal error: not a marker")
+			if err != nil || err != io.EOF {
+				log.Error().AnErr("err", err).Msg("error reading marker")
+				return err
 			}
 		}
 	}
