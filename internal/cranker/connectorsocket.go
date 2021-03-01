@@ -123,7 +123,7 @@ func (s *ConnectorSocket) Start() error {
 		return err
 	}
 
-	go s.waitForRequest()
+	go s.eventloop()
 
 	log.Info().
 		Str("router", s.routerURL).
@@ -133,7 +133,7 @@ func (s *ConnectorSocket) Start() error {
 	return nil
 }
 
-func (s *ConnectorSocket) readRequest() (*http.Request, error) {
+func (s *ConnectorSocket) nextRequest() (*http.Request, error) {
 	messageType, message, err := s.wss.NextReader()
 	if err != nil {
 		log.Error().AnErr("err", err).Msg("error reading request headers")
@@ -229,7 +229,7 @@ func decomposeMethodAndURL(line string) (string, string) {
 	return parts[0], parts[1]
 }
 
-func (s *ConnectorSocket) waitForRequest() error {
+func (s *ConnectorSocket) eventloop() error {
 	defer s.Start() // restart socket after servicing request
 
 	log.Info().
@@ -237,22 +237,22 @@ func (s *ConnectorSocket) waitForRequest() error {
 		Str("target", s.serviceURL).
 		Msg("waiting for request")
 
-	req, err := s.readRequest()
+	req, err := s.nextRequest()
 	if err != nil {
 		log.Error().AnErr("reqErr", err).Msg("error waiting for request")
 		return err
 	}
 
-	resp, err := s.doReq(req)
+	resp, err := s.sendRequest(req)
 	if err != nil {
 		log.Error().AnErr("reqErr", err).Msg("error sending request")
 		return err
 	}
 
-	return s.pumpResponse(resp)
+	return s.sendResponse(resp)
 }
 
-func (s *ConnectorSocket) doReq(req *http.Request) (*http.Response, error) {
+func (s *ConnectorSocket) sendRequest(req *http.Request) (*http.Response, error) {
 	serviceURL, err := url.Parse(s.serviceURL)
 	if err != nil {
 		log.Error().AnErr("urlErr", err).Send()
@@ -269,7 +269,7 @@ func (s *ConnectorSocket) doReq(req *http.Request) (*http.Response, error) {
 	return s.httpClient.Do(req)
 }
 
-func (s *ConnectorSocket) pumpResponse(resp *http.Response) error {
+func (s *ConnectorSocket) sendResponse(resp *http.Response) error {
 	defer s.Close()
 	defer resp.Body.Close()
 	var headerBuf bytes.Buffer
