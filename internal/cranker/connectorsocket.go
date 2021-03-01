@@ -1,4 +1,4 @@
-package connector
+package cranker
 
 import (
 	"bufio"
@@ -18,17 +18,28 @@ const markerReqBodyPending = "_1"
 const markerReqHasNoBody = "_2"
 const markerReqBodyEnded = "_3"
 
-type connectorSocket struct {
+type ConnectorSocket struct {
 	routerURL   string
 	serviceName string
-	targetURL   string
-	wss         *websocket.Conn
+	serviceURL  string
 	dialer      *websocket.Dialer
 	httpClient  *http.Client
+	wss         *websocket.Conn
 	buf         []byte
 }
 
-func (s *connectorSocket) close() error {
+func NewConnectorSocket(routerURL, serviceName, serviceURL string, dialer *websocket.Dialer, httpClient *http.Client) *ConnectorSocket {
+	return &ConnectorSocket{
+		routerURL:   routerURL,
+		serviceName: serviceName,
+		serviceURL:  serviceURL,
+		dialer:      dialer,
+		httpClient:  httpClient,
+		buf:         make([]byte, 4*1024),
+	}
+}
+
+func (s *ConnectorSocket) Close() error {
 	log.Debug().
 		Str("service", s.serviceName).
 		Str("router", s.routerURL).
@@ -41,7 +52,7 @@ func (s *connectorSocket) close() error {
 	return nil
 }
 
-func (s *connectorSocket) dial() error {
+func (s *ConnectorSocket) dial() error {
 	if s.dialer == nil {
 		return errors.New("dialer is nil. Has the socket been initialized properly?")
 	}
@@ -94,10 +105,10 @@ func (s *connectorSocket) dial() error {
 	return nil
 }
 
-func (s *connectorSocket) start() error {
+func (s *ConnectorSocket) Start() error {
 	log.Info().
 		Str("router", s.routerURL).
-		Str("service", s.targetURL).
+		Str("service", s.serviceURL).
 		Msg("socket starting")
 
 	err := s.dial()
@@ -111,13 +122,13 @@ func (s *connectorSocket) start() error {
 
 	log.Info().
 		Str("router", s.routerURL).
-		Str("target", s.targetURL).
+		Str("target", s.serviceURL).
 		Msg("socket started")
 
 	return nil
 }
 
-func (s *connectorSocket) readRequest() (*http.Request, error) {
+func (s *ConnectorSocket) readRequest() (*http.Request, error) {
 	messageType, message, err := s.wss.NextReader()
 	if err != nil {
 		log.Error().AnErr("err", err).Msg("error reading request headers")
@@ -169,7 +180,7 @@ func (s *connectorSocket) readRequest() (*http.Request, error) {
 	return req, nil
 }
 
-func (s *connectorSocket) pumpRequestBody(out *io.PipeWriter) error {
+func (s *ConnectorSocket) pumpRequestBody(out *io.PipeWriter) error {
 	for {
 		log.Debug().Msg("draining request body")
 		messageType, message, err := s.wss.NextReader()
@@ -213,7 +224,12 @@ func decomposeMethodAndURL(line string) (string, string) {
 	return parts[0], parts[1]
 }
 
-func (s *connectorSocket) waitForRequest() error {
+func (s *ConnectorSocket) waitForRequest() error {
+	log.Info().
+		Str("router", s.routerURL).
+		Str("target", s.serviceURL).
+		Msg("waiting for request")
+
 	req, err := s.readRequest()
 	if err != nil {
 		log.Error().AnErr("reqErr", err).Msg("error waiting for request")
@@ -229,8 +245,8 @@ func (s *connectorSocket) waitForRequest() error {
 	return s.pumpResponse(resp)
 }
 
-func (s *connectorSocket) doReq(req *http.Request) (*http.Response, error) {
-	serviceURL, err := url.Parse(s.targetURL)
+func (s *ConnectorSocket) doReq(req *http.Request) (*http.Response, error) {
+	serviceURL, err := url.Parse(s.serviceURL)
 	if err != nil {
 		log.Error().AnErr("urlErr", err).Send()
 		return nil, err
@@ -246,8 +262,8 @@ func (s *connectorSocket) doReq(req *http.Request) (*http.Response, error) {
 	return s.httpClient.Do(req)
 }
 
-func (s *connectorSocket) pumpResponse(resp *http.Response) error {
-	defer s.close()
+func (s *ConnectorSocket) pumpResponse(resp *http.Response) error {
+	defer s.Close()
 	defer resp.Body.Close()
 	var headerBuf bytes.Buffer
 	fmt.Fprintf(&headerBuf, "%s %s\r\n", resp.Proto, resp.Status)

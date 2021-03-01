@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-cranker/internal/cranker"
 	"github.com/go-cranker/internal/util"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
@@ -67,19 +68,18 @@ func (c *Connector) Connect(
 
 	for i := 0; i < noOfRouterURLs; i++ {
 		for j := 0; j < slidingWindow; j++ {
-			cs := connectorSocket{
-				routerURL:   c.routerURLs[i].String(),
-				targetURL:   c.targetURL.String(),
-				httpClient:  c.httpClient,
-				dialer:      c.dialer,
-				serviceName: serviceName,
-				buf:         make([]byte, 16*1024),
-			}
+			cs := cranker.NewConnectorSocket(
+				c.routerURLs[i].String(),
+				serviceName,
+				c.targetURL.String(),
+				c.dialer,
+				c.httpClient)
 
 			wgSockets.Add(1)
+
 			go func() {
 				defer wgSockets.Done()
-				cs.start()
+				cs.Start()
 			}()
 		}
 	}
