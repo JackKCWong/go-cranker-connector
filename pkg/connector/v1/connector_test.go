@@ -11,6 +11,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/go-cranker/pkg/config"
+
 	"github.com/go-cranker/internal/util"
 	"github.com/stretchr/testify/assert"
 
@@ -87,16 +89,19 @@ func TestMain(t *testing.M) {
 }
 
 func newConnector() *Connector {
-	return NewConnector(&RouterConfig{
-		TLSClientConfig: tlsSkipVerify,
-	}, &ServiceConfig{
-		HttpClient: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: tlsSkipVerify,
-				// Proxy:           util.OSHttpProxy(),
-			},
+	return NewConnector(
+		&config.RouterConfig{
+			TLSClientConfig:   tlsSkipVerify,
+			WSHandshakTimeout: 1 * time.Second,
 		},
-	})
+		&config.ServiceConfig{
+			HTTPClient: &http.Client{
+				Transport: &http.Transport{
+					TLSClientConfig: tlsSkipVerify,
+					// Proxy:           util.OSHttpProxy(),
+				},
+			},
+		})
 }
 
 func TestCanHandleGetRequest(t *testing.T) {

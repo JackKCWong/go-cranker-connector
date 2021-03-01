@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/go-cranker/pkg/config"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 )
@@ -28,14 +29,18 @@ type ConnectorSocket struct {
 	buf         []byte
 }
 
-func NewConnectorSocket(routerURL, serviceName, serviceURL string, dialer *websocket.Dialer, httpClient *http.Client) *ConnectorSocket {
+func NewConnectorSocket(routerURL, serviceName, serviceURL string,
+	config *config.RouterConfig, httpClient *http.Client) *ConnectorSocket {
 	return &ConnectorSocket{
 		routerURL:   routerURL,
 		serviceName: serviceName,
 		serviceURL:  serviceURL,
-		dialer:      dialer,
-		httpClient:  httpClient,
-		buf:         make([]byte, 4*1024),
+		dialer: &websocket.Dialer{
+			TLSClientConfig:  config.TLSClientConfig,
+			HandshakeTimeout: config.WSHandshakTimeout,
+		},
+		httpClient: httpClient,
+		buf:        make([]byte, 4*1024),
 	}
 }
 
