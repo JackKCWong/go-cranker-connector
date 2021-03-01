@@ -7,4 +7,5 @@ require (
 	github.com/gorilla/websocket v1.4.1
 	github.com/rs/zerolog v1.20.0
 	github.com/stretchr/testify v1.7.0
+	nhooyr.io/websocket v1.8.6 // indirect
 )

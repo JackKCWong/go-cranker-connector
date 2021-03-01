@@ -1,7 +1,6 @@
 package cranker
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -20,21 +19,23 @@ const markerReqHasNoBody = "_2"
 const markerReqBodyEnded = "_3"
 
 type ConnectorSocket struct {
-	routerURL   string
-	serviceName string
-	serviceURL  string
-	dialer      *websocket.Dialer
-	httpClient  *http.Client
-	wss         *websocket.Conn
-	buf         []byte
+	routerURL     string
+	serviceName   string
+	servicePrefix string
+	serviceURL    string
+	dialer        *websocket.Dialer
+	httpClient    *http.Client
+	wss           *websocket.Conn
+	buf           []byte
 }
 
 func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 	config *config.RouterConfig, httpClient *http.Client) *ConnectorSocket {
 	return &ConnectorSocket{
-		routerURL:   routerURL,
-		serviceName: serviceName,
-		serviceURL:  serviceURL,
+		routerURL:     routerURL,
+		serviceName:   serviceName,
+		servicePrefix: "/" + serviceName,
+		serviceURL:    serviceURL,
 		dialer: &websocket.Dialer{
 			TLSClientConfig:  config.TLSClientConfig,
 			HandshakeTimeout: config.WSHandshakTimeout,
@@ -149,26 +150,20 @@ func (s *ConnectorSocket) nextRequest() (*http.Request, error) {
 		return nil, err
 	}
 
-	n, err := message.Read(s.buf)
+	headerSize, err := message.Read(s.buf)
 	if err != nil && err != io.EOF {
 		log.Error().AnErr("err", err).Msg("error reading request headers")
 		return nil, err
 	}
 
-	log.Debug().Bytes("recv", s.buf[0:n]).Msg("wss msg received")
+	log.Debug().Bytes("recv", s.buf[0:headerSize]).Msg("wss msg received")
 
-	reader := bufio.NewReader(bytes.NewReader(s.buf[0:n]))
-	firstline, err := reader.ReadString('\n')
-	if err != nil {
-		log.Error().AnErr("err", err).Msg("error reading 1st line in request")
-		return nil, err
-	}
-
-	method, url := decomposeMethodAndURL(firstline)
-	url = strings.TrimPrefix(url, "/"+s.serviceName)
+	firstline := s.buf[0:bytes.IndexByte(s.buf, '\n')]
+	method, url := decomposeMethodAndURL(string(firstline))
+	url = strings.TrimPrefix(url, s.servicePrefix)
 
 	var req *http.Request
-	if bytes.Compare(s.buf[n-2:n], []byte(markerReqHasNoBody)) == 0 {
+	if bytes.Compare(s.buf[headerSize-2:headerSize], []byte(markerReqHasNoBody)) == 0 {
 		log.Debug().Msg("request has no body")
 		req, err = http.NewRequest(method, url, nil)
 	} else {
