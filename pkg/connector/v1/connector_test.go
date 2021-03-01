@@ -64,7 +64,7 @@ func setupTestServer() *httptest.Server {
 
 var (
 	testServer    *httptest.Server
-	testClient            *http.Client
+	testClient    *http.Client
 	tlsSkipVerify *tls.Config
 )
 
@@ -99,7 +99,7 @@ func newConnector() *Connector {
 	})
 }
 
-func TestCanHandlerGetRequest(t *testing.T) {
+func TestCanHandleGetRequest(t *testing.T) {
 	assert := assert.New(t)
 	connector := newConnector()
 	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test1", testServer.URL)
@@ -116,7 +116,28 @@ func TestCanHandlerGetRequest(t *testing.T) {
 	assert.Equal("200 OK", resp.Status)
 }
 
-func TestCanHandlerPostRequest(t *testing.T) {
+func TestCanHandleReconnect(t *testing.T) {
+	assert := assert.New(t)
+	connector := newConnector()
+	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test1", testServer.URL)
+	assert.Nilf(err, "failed to connect to cranker")
+
+	defer connector.Shutdown()
+
+	for i := 0; i < 3; i++ {
+		req, _ := http.NewRequest("GET", "https://localhost:8443/test1/get", nil)
+		resp, err := testClient.Do(req)
+
+		assert.Nilf(err, "failed to request to cranker: %q", err)
+
+		defer resp.Body.Close()
+		assert.Equal("200 OK", resp.Status)
+
+		time.Sleep(100 * time.Microsecond)
+	}
+}
+
+func TestCanHandlePostRequest(t *testing.T) {
 	assert := assert.New(t)
 	connector := newConnector()
 	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test2", testServer.URL)

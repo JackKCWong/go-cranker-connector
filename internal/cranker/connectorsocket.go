@@ -225,6 +225,8 @@ func decomposeMethodAndURL(line string) (string, string) {
 }
 
 func (s *ConnectorSocket) waitForRequest() error {
+	defer s.Start() // restart socket after servicing request
+
 	log.Info().
 		Str("router", s.routerURL).
 		Str("target", s.serviceURL).
