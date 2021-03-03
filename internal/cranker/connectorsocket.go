@@ -18,6 +18,7 @@ const markerReqBodyPending = "_1"
 const markerReqHasNoBody = "_2"
 const markerReqBodyEnded = "_3"
 
+// ConnectorSocket represents a connection to a cranker router
 type ConnectorSocket struct {
 	routerURL     string
 	serviceName   string
@@ -29,6 +30,8 @@ type ConnectorSocket struct {
 	buf           []byte
 }
 
+
+// NewConnectorSocket returns one new connection to a router URL.
 func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 	config *config.RouterConfig, httpClient *http.Client) *ConnectorSocket {
 	return &ConnectorSocket{
@@ -45,6 +48,7 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 	}
 }
 
+// Close the underlying websocket connection
 func (s *ConnectorSocket) Close() error {
 	log.Debug().
 		Str("service", s.serviceName).
@@ -111,6 +115,8 @@ func (s *ConnectorSocket) dial() error {
 	return nil
 }
 
+
+// Start connection to cranker router and consume incoming requests.
 func (s *ConnectorSocket) Start() error {
 	log.Info().
 		Str("router", s.routerURL).
@@ -163,10 +169,12 @@ func (s *ConnectorSocket) nextRequest() (*http.Request, error) {
 	url = strings.TrimPrefix(url, s.servicePrefix)
 
 	var req *http.Request
-	if bytes.Compare(s.buf[headerSize-2:headerSize], []byte(markerReqHasNoBody)) == 0 {
-		log.Debug().Msg("request has no body")
+	marker := s.buf[headerSize-2 : headerSize]
+	if bytes.Compare(marker, []byte(markerReqHasNoBody)) == 0 {
+		log.Debug().Msg("request without body")
 		req, err = http.NewRequest(method, url, nil)
 	} else {
+		log.Debug().Msg("request with body")
 		r, w := io.Pipe()
 		req, err = http.NewRequest(method, url, r)
 		go s.pumpRequestBody(w)
