@@ -2,7 +2,7 @@ package cranker
 
 import (
 	"bytes"
-	"errors"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/go-cranker/pkg/config"
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
+	"nhooyr.io/websocket"
 )
 
 const markerReqBodyPending = "_1"
@@ -24,12 +24,10 @@ type ConnectorSocket struct {
 	serviceName   string
 	servicePrefix string
 	serviceURL    string
-	dialer        *websocket.Dialer
 	httpClient    *http.Client
 	wss           *websocket.Conn
 	buf           []byte
 }
-
 
 // NewConnectorSocket returns one new connection to a router URL.
 func NewConnectorSocket(routerURL, serviceName, serviceURL string,
@@ -39,12 +37,8 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 		serviceName:   serviceName,
 		servicePrefix: "/" + serviceName,
 		serviceURL:    serviceURL,
-		dialer: &websocket.Dialer{
-			TLSClientConfig:  config.TLSClientConfig,
-			HandshakeTimeout: config.WSHandshakTimeout,
-		},
-		httpClient: httpClient,
-		buf:        make([]byte, 4*1024),
+		httpClient:    httpClient,
+		buf:           make([]byte, 4*1024),
 	}
 }
 
@@ -56,24 +50,24 @@ func (s *ConnectorSocket) Close() error {
 		Msg("closing connector socket")
 
 	if s.wss != nil {
-		return s.wss.Close()
+		return s.wss.Close(websocket.StatusNormalClosure, "close requested by client")
 	}
 
 	return nil
 }
 
 func (s *ConnectorSocket) dial() error {
-	if s.dialer == nil {
-		return errors.New("dialer is nil. Has the socket been initialized properly?")
-	}
-
 	headers := http.Header{}
 	headers.Add("CrankerProtocol", "1.0")
 	headers.Add("Route", s.serviceName)
 
-	conn, resp, err := s.dialer.Dial(
+	conn, resp, err := websocket.Dial(
+		context.TODO(),
 		fmt.Sprintf("%s/%s", s.routerURL, "register"),
-		headers)
+		&websocket.DialOptions{
+			HTTPClient: s.httpClient,
+			HTTPHeader: headers,
+		})
 
 	if resp != nil {
 		log.Debug().
@@ -93,28 +87,8 @@ func (s *ConnectorSocket) dial() error {
 
 	s.wss = conn
 
-	s.wss.SetPingHandler(func(appData string) error {
-		log.Debug().Str("ping:", appData).Send()
-		return nil
-	})
-
-	s.wss.SetPongHandler(func(appData string) error {
-		log.Debug().Str("pong:", appData).Send()
-		return nil
-	})
-
-	s.wss.SetCloseHandler(func(code int, text string) error {
-		log.Info().Int("code", code).
-			Str("text", text).
-			Str("url", s.routerURL).
-			Msg("wss closed")
-
-		return nil
-	})
-
 	return nil
 }
-
 
 // Start connection to cranker router and consume incoming requests.
 func (s *ConnectorSocket) Start() error {
@@ -141,13 +115,13 @@ func (s *ConnectorSocket) Start() error {
 }
 
 func (s *ConnectorSocket) nextRequest() (*http.Request, error) {
-	messageType, message, err := s.wss.NextReader()
+	messageType, message, err := s.wss.Reader(context.TODO())
 	if err != nil {
 		log.Error().AnErr("err", err).Msg("error reading request headers")
 		return nil, err
 	}
 
-	if messageType != websocket.TextMessage {
+	if messageType != websocket.MessageText {
 		log.Error().
 			Str("expectedMessageType", "textMessage").
 			Str("actualMessageType", "binaryMessage").
@@ -191,20 +165,20 @@ func (s *ConnectorSocket) nextRequest() (*http.Request, error) {
 func (s *ConnectorSocket) pumpRequestBody(out *io.PipeWriter) error {
 	for {
 		log.Debug().Msg("draining request body")
-		messageType, message, err := s.wss.NextReader()
+		messageType, message, err := s.wss.Reader(context.TODO())
 		if err != nil {
 			return err
 		}
 
 		switch messageType {
-		case websocket.BinaryMessage:
+		case websocket.MessageBinary:
 			n, err := io.CopyBuffer(out, message, s.buf)
 			if err != nil {
 				return err
 			}
 
 			log.Debug().Int64("bytesSent", n).Msg("sending request body")
-		case websocket.TextMessage:
+		case websocket.MessageText:
 			n, err := message.Read(s.buf)
 
 			log.Debug().
@@ -279,9 +253,12 @@ func (s *ConnectorSocket) sendResponse(resp *http.Response) error {
 	fmt.Fprintf(&headerBuf, "%s %s\r\n", resp.Proto, resp.Status)
 	resp.Header.Write(&headerBuf)
 	log.Debug().Bytes("respHeader", headerBuf.Bytes()).Msg("sending response headers")
-	err := s.wss.WriteMessage(websocket.TextMessage, headerBuf.Bytes())
 
-	w, err := s.wss.NextWriter(websocket.BinaryMessage)
+	// write headers in text
+	err := s.wss.Write(context.TODO(), websocket.MessageText, headerBuf.Bytes())
+
+	// write body in binary
+	w, err := s.wss.Writer(context.TODO(), websocket.MessageBinary)
 	if err != nil {
 		log.Error().AnErr("writeRespErr", err).Msg("error creating resp writer")
 		return err
