@@ -27,6 +27,7 @@ type ConnectorSocket struct {
 	httpClient    *http.Client
 	wss           *websocket.Conn
 	buf           []byte
+	cancelfn      context.CancelFunc
 }
 
 // NewConnectorSocket returns one new connection to a router URL.
@@ -49,6 +50,8 @@ func (s *ConnectorSocket) Close() error {
 		Str("router", s.routerURL).
 		Msg("closing connector socket")
 
+	s.cancelfn()
+
 	if s.wss != nil {
 		return s.wss.Close(websocket.StatusNormalClosure, "close requested by client")
 	}
@@ -56,13 +59,13 @@ func (s *ConnectorSocket) Close() error {
 	return nil
 }
 
-func (s *ConnectorSocket) dial() error {
+func (s *ConnectorSocket) dial(ctx context.Context) error {
 	headers := http.Header{}
 	headers.Add("CrankerProtocol", "1.0")
 	headers.Add("Route", s.serviceName)
 
 	conn, resp, err := websocket.Dial(
-		context.TODO(),
+		ctx,
 		fmt.Sprintf("%s/%s", s.routerURL, "register"),
 		&websocket.DialOptions{
 			HTTPClient: s.httpClient,
@@ -97,14 +100,16 @@ func (s *ConnectorSocket) Start() error {
 		Str("service", s.serviceURL).
 		Msg("socket starting")
 
-	err := s.dial()
+	ctx, cancelfn := context.WithCancel(context.Background())
+	s.cancelfn = cancelfn
+	err := s.dial(ctx)
 
 	if err != nil {
 		log.Error().AnErr("err", err).Msg("error dialing")
 		return err
 	}
 
-	go s.serviceLoop()
+	go s.serviceLoop(ctx)
 
 	log.Info().
 		Str("router", s.routerURL).
@@ -114,8 +119,8 @@ func (s *ConnectorSocket) Start() error {
 	return nil
 }
 
-func (s *ConnectorSocket) nextRequest() (*http.Request, error) {
-	messageType, message, err := s.wss.Reader(context.TODO())
+func (s *ConnectorSocket) nextRequest(ctx context.Context) (*http.Request, error) {
+	messageType, message, err := s.wss.Reader(ctx)
 	if err != nil {
 		log.Error().AnErr("err", err).Msg("error reading request headers")
 		return nil, err
@@ -151,7 +156,7 @@ func (s *ConnectorSocket) nextRequest() (*http.Request, error) {
 		log.Debug().Msg("request with body")
 		r, w := io.Pipe()
 		req, err = http.NewRequest(method, url, r)
-		go s.pumpRequestBody(w)
+		go s.pumpRequestBody(ctx, w)
 	}
 
 	if err != nil {
@@ -162,10 +167,10 @@ func (s *ConnectorSocket) nextRequest() (*http.Request, error) {
 	return req, nil
 }
 
-func (s *ConnectorSocket) pumpRequestBody(out *io.PipeWriter) error {
+func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWriter) error {
 	for {
 		log.Debug().Msg("draining request body")
-		messageType, message, err := s.wss.Reader(context.TODO())
+		messageType, message, err := s.wss.Reader(ctx)
 		if err != nil {
 			return err
 		}
@@ -206,7 +211,7 @@ func decomposeMethodAndURL(line string) (string, string) {
 	return parts[0], parts[1]
 }
 
-func (s *ConnectorSocket) serviceLoop() error {
+func (s *ConnectorSocket) serviceLoop(ctx context.Context) error {
 	defer s.Start() // restart socket after servicing request
 
 	log.Info().
@@ -214,22 +219,22 @@ func (s *ConnectorSocket) serviceLoop() error {
 		Str("target", s.serviceURL).
 		Msg("waiting for request")
 
-	req, err := s.nextRequest()
+	req, err := s.nextRequest(ctx)
 	if err != nil {
 		log.Error().AnErr("reqErr", err).Msg("error waiting for request")
 		return err
 	}
 
-	resp, err := s.sendRequest(req)
+	resp, err := s.sendRequest(ctx, req)
 	if err != nil {
 		log.Error().AnErr("reqErr", err).Msg("error sending request")
 		return err
 	}
 
-	return s.sendResponse(resp)
+	return s.sendResponse(ctx, resp)
 }
 
-func (s *ConnectorSocket) sendRequest(req *http.Request) (*http.Response, error) {
+func (s *ConnectorSocket) sendRequest(ctx context.Context, req *http.Request) (*http.Response, error) {
 	serviceURL, err := url.Parse(s.serviceURL)
 	if err != nil {
 		log.Error().AnErr("urlErr", err).Send()
@@ -246,7 +251,7 @@ func (s *ConnectorSocket) sendRequest(req *http.Request) (*http.Response, error)
 	return s.httpClient.Do(req)
 }
 
-func (s *ConnectorSocket) sendResponse(resp *http.Response) error {
+func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response) error {
 	defer s.Close()
 	defer resp.Body.Close()
 	var headerBuf bytes.Buffer
@@ -255,10 +260,10 @@ func (s *ConnectorSocket) sendResponse(resp *http.Response) error {
 	log.Debug().Bytes("respHeader", headerBuf.Bytes()).Msg("sending response headers")
 
 	// write headers in text
-	err := s.wss.Write(context.TODO(), websocket.MessageText, headerBuf.Bytes())
+	err := s.wss.Write(ctx, websocket.MessageText, headerBuf.Bytes())
 
 	// write body in binary
-	w, err := s.wss.Writer(context.TODO(), websocket.MessageBinary)
+	w, err := s.wss.Writer(ctx, websocket.MessageBinary)
 	if err != nil {
 		log.Error().AnErr("writeRespErr", err).Msg("error creating resp writer")
 		return err
