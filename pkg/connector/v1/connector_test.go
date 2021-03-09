@@ -2,6 +2,7 @@ package connector
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io/ioutil"
@@ -107,7 +108,7 @@ func newConnector() *Connector {
 func TestCanHandleGetRequest(t *testing.T) {
 	assert := assert.New(t)
 	connector := newConnector()
-	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test1", testServer.URL)
+	err := connector.Connect(context.Background(), []string{"wss://localhost:16489"}, 1, "test1", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
 	defer connector.Shutdown()
@@ -124,7 +125,7 @@ func TestCanHandleGetRequest(t *testing.T) {
 func TestCanHandleReconnect(t *testing.T) {
 	assert := assert.New(t)
 	connector := newConnector()
-	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test1", testServer.URL)
+	err := connector.Connect(context.Background(), []string{"wss://localhost:16489"}, 1, "test1", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
 	defer connector.Shutdown()
@@ -145,7 +146,7 @@ func TestCanHandleReconnect(t *testing.T) {
 func TestCanHandlePostRequest(t *testing.T) {
 	assert := assert.New(t)
 	connector := newConnector()
-	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test2", testServer.URL)
+	err := connector.Connect(context.Background(), []string{"wss://localhost:16489"}, 1, "test2", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
 	defer connector.Shutdown()

@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"sync"
@@ -13,7 +14,7 @@ import (
 // Connector connects the local service to crankers
 type Connector struct {
 	routerURLs   []*url.URL
-	targetURL    *url.URL
+	serviceURL    *url.URL
 	httpClient   *http.Client
 	routerConfig *config.RouterConfig
 }
@@ -29,11 +30,12 @@ func NewConnector(rc *config.RouterConfig, sc *config.ServiceConfig) *Connector 
 
 // Connect to the target crankers
 func (c *Connector) Connect(
+	ctx context.Context,
 	routerURLs []string, slidingWindow int,
 	serviceName string, serviceURL string) error {
 
 	var err error
-	c.targetURL, err = url.Parse(serviceURL)
+	c.serviceURL, err = url.Parse(serviceURL)
 
 	if err != nil {
 		return err
@@ -55,7 +57,7 @@ func (c *Connector) Connect(
 			cs := cranker.NewConnectorSocket(
 				c.routerURLs[i].String(),
 				serviceName,
-				c.targetURL.String(),
+				c.serviceURL.String(),
 				c.routerConfig,
 				c.httpClient)
 

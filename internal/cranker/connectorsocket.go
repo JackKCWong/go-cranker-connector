@@ -130,7 +130,7 @@ func (s *ConnectorSocket) Start() error {
 		return err
 	}
 
-	go s.eventloop()
+	go s.serviceLoop()
 
 	log.Info().
 		Str("router", s.routerURL).
@@ -232,7 +232,7 @@ func decomposeMethodAndURL(line string) (string, string) {
 	return parts[0], parts[1]
 }
 
-func (s *ConnectorSocket) eventloop() error {
+func (s *ConnectorSocket) serviceLoop() error {
 	defer s.Start() // restart socket after servicing request
 
 	log.Info().
