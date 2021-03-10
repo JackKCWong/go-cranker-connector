@@ -1,7 +1,6 @@
 package connector
 
 import (
-	"context"
 	"net/http"
 	"net/url"
 	"sync"
@@ -13,10 +12,11 @@ import (
 
 // Connector connects the local service to crankers
 type Connector struct {
-	routerURLs   []*url.URL
-	serviceURL    *url.URL
-	httpClient   *http.Client
-	routerConfig *config.RouterConfig
+	routerURLs       []*url.URL
+	serviceURL       *url.URL
+	httpClient       *http.Client
+	routerConfig     *config.RouterConfig
+	connectorSockets []*cranker.ConnectorSocket
 }
 
 // NewConnector returns a new Connector
@@ -30,7 +30,6 @@ func NewConnector(rc *config.RouterConfig, sc *config.ServiceConfig) *Connector 
 
 // Connect to the target crankers
 func (c *Connector) Connect(
-	ctx context.Context,
 	routerURLs []string, slidingWindow int,
 	serviceName string, serviceURL string) error {
 
@@ -52,6 +51,8 @@ func (c *Connector) Connect(
 
 	var wgSockets sync.WaitGroup
 
+	c.connectorSockets = make([]*cranker.ConnectorSocket,0, noOfRouterURLs*slidingWindow)
+
 	for i := 0; i < noOfRouterURLs; i++ {
 		for j := 0; j < slidingWindow; j++ {
 			cs := cranker.NewConnectorSocket(
@@ -62,7 +63,7 @@ func (c *Connector) Connect(
 				c.httpClient)
 
 			wgSockets.Add(1)
-
+			c.connectorSockets = append(c.connectorSockets, cs)
 			go func() {
 				defer wgSockets.Done()
 				cs.Start()
@@ -78,7 +79,15 @@ func (c *Connector) Connect(
 // Shutdown stops and clean up all sockets
 func (c *Connector) Shutdown() error {
 	defer log.Info().Msg("connector destroyed")
-	log.Info().Msg("destroying connector")
+
+	log.Info().
+		Int("sockets", len(c.connectorSockets)).
+		Msg("destroying connector")
+
+	for _, cs := range c.connectorSockets {
+		log.Debug().Interface("socket", cs).Msg("closing connector socket")
+		cs.Close()
+	}
 
 	return nil
 }

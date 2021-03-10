@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/go-cranker/pkg/config"
+	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"nhooyr.io/websocket"
 )
@@ -20,6 +22,7 @@ const markerReqBodyEnded = "_3"
 
 // ConnectorSocket represents a connection to a cranker router
 type ConnectorSocket struct {
+	uuid          string
 	routerURL     string
 	serviceName   string
 	servicePrefix string
@@ -28,12 +31,23 @@ type ConnectorSocket struct {
 	wss           *websocket.Conn
 	buf           []byte
 	cancelfn      context.CancelFunc
+	log           zerolog.Logger
 }
 
 // NewConnectorSocket returns one new connection to a router URL.
 func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 	config *config.RouterConfig, httpClient *http.Client) *ConnectorSocket {
+
+	uuid := uuid.New().String()
 	return &ConnectorSocket{
+		log: log.With().
+			Str("socketId", uuid).
+			Str("routerURL", routerURL).
+			Str("serviceURL", serviceURL).
+			Str("serviceName", serviceName).
+			Logger(),
+
+		uuid:          uuid,
 		routerURL:     routerURL,
 		serviceName:   serviceName,
 		servicePrefix: "/" + serviceName,
@@ -45,14 +59,16 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 
 // Close the underlying websocket connection
 func (s *ConnectorSocket) Close() error {
-	log.Debug().
-		Str("service", s.serviceName).
-		Str("router", s.routerURL).
-		Msg("closing connector socket")
+	if s.cancelfn != nil {
+		s.log.Debug().
+			Msg("canceling in-flight jobs")
 
-	s.cancelfn()
+		s.cancelfn()
+	}
 
 	if s.wss != nil {
+		s.log.Debug().
+			Msg("closing socket connection")
 		return s.wss.Close(websocket.StatusNormalClosure, "close requested by client")
 	}
 
@@ -73,15 +89,13 @@ func (s *ConnectorSocket) dial(ctx context.Context) error {
 		})
 
 	if resp != nil {
-		log.Debug().
+		s.log.Debug().
 			Str("status", resp.Status).
-			Str("url", s.routerURL).
 			Msg("wss connected")
 	}
 
 	if err != nil {
-		log.Error().
-			Str("router", s.routerURL).
+		s.log.Error().
 			Str("error", err.Error()).
 			Msg("failed to connect to cranker router")
 
@@ -95,9 +109,9 @@ func (s *ConnectorSocket) dial(ctx context.Context) error {
 
 // Start connection to cranker router and consume incoming requests.
 func (s *ConnectorSocket) Start() error {
-	log.Info().
-		Str("router", s.routerURL).
-		Str("service", s.serviceURL).
+	s.Close()
+
+	s.log.Info().
 		Msg("socket starting")
 
 	ctx, cancelfn := context.WithCancel(context.Background())
@@ -105,15 +119,13 @@ func (s *ConnectorSocket) Start() error {
 	err := s.dial(ctx)
 
 	if err != nil {
-		log.Error().AnErr("err", err).Msg("error dialing")
+		s.log.Error().AnErr("err", err).Msg("error dialing")
 		return err
 	}
 
-	go s.serviceLoop(ctx)
+	go s.handleRequest(ctx)
 
-	log.Info().
-		Str("router", s.routerURL).
-		Str("target", s.serviceURL).
+	s.log.Info().
 		Msg("socket started")
 
 	return nil
@@ -122,12 +134,12 @@ func (s *ConnectorSocket) Start() error {
 func (s *ConnectorSocket) nextRequest(ctx context.Context) (*http.Request, error) {
 	messageType, message, err := s.wss.Reader(ctx)
 	if err != nil {
-		log.Error().AnErr("err", err).Msg("error reading request headers")
+		s.log.Error().AnErr("err", err).Msg("error creating request headers reader")
 		return nil, err
 	}
 
 	if messageType != websocket.MessageText {
-		log.Error().
+		s.log.Error().
 			Str("expectedMessageType", "textMessage").
 			Str("actualMessageType", "binaryMessage").
 			Msg("protocal error")
@@ -137,11 +149,11 @@ func (s *ConnectorSocket) nextRequest(ctx context.Context) (*http.Request, error
 
 	headerSize, err := message.Read(s.buf)
 	if err != nil && err != io.EOF {
-		log.Error().AnErr("err", err).Msg("error reading request headers")
+		s.log.Error().AnErr("err", err).Msg("error reading request headers")
 		return nil, err
 	}
 
-	log.Debug().Bytes("recv", s.buf[0:headerSize]).Msg("wss msg received")
+	s.log.Debug().Bytes("recv", s.buf[0:headerSize]).Msg("wss msg received")
 
 	firstline := s.buf[0:bytes.IndexByte(s.buf, '\n')]
 	method, url := decomposeMethodAndURL(string(firstline))
@@ -150,17 +162,17 @@ func (s *ConnectorSocket) nextRequest(ctx context.Context) (*http.Request, error
 	var req *http.Request
 	marker := s.buf[headerSize-2 : headerSize]
 	if bytes.Compare(marker, []byte(markerReqHasNoBody)) == 0 {
-		log.Debug().Msg("request without body")
+		s.log.Debug().Msg("request without body")
 		req, err = http.NewRequest(method, url, nil)
 	} else {
-		log.Debug().Msg("request with body")
+		s.log.Debug().Msg("request with body")
 		r, w := io.Pipe()
 		req, err = http.NewRequest(method, url, r)
 		go s.pumpRequestBody(ctx, w)
 	}
 
 	if err != nil {
-		log.Error().AnErr("err", err).Msg("error creating request")
+		s.log.Error().AnErr("err", err).Msg("error creating request")
 		return nil, err
 	}
 
@@ -169,7 +181,7 @@ func (s *ConnectorSocket) nextRequest(ctx context.Context) (*http.Request, error
 
 func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWriter) error {
 	for {
-		log.Debug().Msg("draining request body")
+		s.log.Debug().Msg("draining request body")
 		messageType, message, err := s.wss.Reader(ctx)
 		if err != nil {
 			return err
@@ -182,11 +194,11 @@ func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWrite
 				return err
 			}
 
-			log.Debug().Int64("bytesSent", n).Msg("sending request body")
+			s.log.Debug().Int64("bytesSent", n).Msg("sending request body")
 		case websocket.MessageText:
 			n, err := message.Read(s.buf)
 
-			log.Debug().
+			s.log.Debug().
 				Bytes("recv", s.buf[0:n]).
 				Msg("expecting a marker")
 
@@ -197,9 +209,9 @@ func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWrite
 				}
 			}
 
-			log.Error().Bytes("recv", s.buf[0:n]).Msg("protocal error: not a marker")
+			s.log.Error().Bytes("recv", s.buf[0:n]).Msg("protocal error: not a marker")
 			if err != nil || err != io.EOF {
-				log.Error().AnErr("err", err).Msg("error reading marker")
+				s.log.Error().AnErr("err", err).Msg("error reading marker")
 				return err
 			}
 		}
@@ -211,41 +223,45 @@ func decomposeMethodAndURL(line string) (string, string) {
 	return parts[0], parts[1]
 }
 
-func (s *ConnectorSocket) serviceLoop(ctx context.Context) error {
+func (s *ConnectorSocket) handleRequest(ctx context.Context) error {
 	defer s.Start() // restart socket after servicing request
 
-	log.Info().
-		Str("router", s.routerURL).
-		Str("target", s.serviceURL).
+	s.log.Info().
 		Msg("waiting for request")
 
 	req, err := s.nextRequest(ctx)
 	if err != nil {
-		log.Error().AnErr("reqErr", err).Msg("error waiting for request")
+		s.log.Error().AnErr("readReqErr", err).Msg("error reading request")
 		return err
 	}
 
 	resp, err := s.sendRequest(ctx, req)
 	if err != nil {
-		log.Error().AnErr("reqErr", err).Msg("error sending request")
+		s.log.Error().AnErr("reqErr", err).Msg("error sending request")
 		return err
 	}
 
-	return s.sendResponse(ctx, resp)
+	err = s.sendResponse(ctx, resp)
+	if err != nil {
+		s.log.Error().AnErr("respErr", err).Msg("error sending response")
+		return err
+	}
+
+	return nil
 }
 
 func (s *ConnectorSocket) sendRequest(ctx context.Context, req *http.Request) (*http.Response, error) {
 	serviceURL, err := url.Parse(s.serviceURL)
 	if err != nil {
-		log.Error().AnErr("urlErr", err).Send()
+		s.log.Error().AnErr("urlErr", err).Send()
 		return nil, err
 	}
 
 	req.URL = serviceURL.ResolveReference(req.URL)
 	req.RequestURI = ""
 
-	log.Debug().
-		Str("url", req.URL.String()).
+	s.log.Debug().
+		Str("reqURL", req.URL.String()).
 		Msg("prep req url")
 
 	return s.httpClient.Do(req)
@@ -257,7 +273,7 @@ func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response)
 	var headerBuf bytes.Buffer
 	fmt.Fprintf(&headerBuf, "%s %s\r\n", resp.Proto, resp.Status)
 	resp.Header.Write(&headerBuf)
-	log.Debug().Bytes("respHeader", headerBuf.Bytes()).Msg("sending response headers")
+	s.log.Debug().Bytes("respHeader", headerBuf.Bytes()).Msg("sending response headers")
 
 	// write headers in text
 	err := s.wss.Write(ctx, websocket.MessageText, headerBuf.Bytes())
@@ -265,7 +281,7 @@ func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response)
 	// write body in binary
 	w, err := s.wss.Writer(ctx, websocket.MessageBinary)
 	if err != nil {
-		log.Error().AnErr("writeRespErr", err).Msg("error creating resp writer")
+		s.log.Error().AnErr("writeRespErr", err).Msg("error creating resp writer")
 		return err
 	}
 
@@ -273,11 +289,11 @@ func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response)
 	n, err := io.CopyBuffer(w, resp.Body, s.buf)
 
 	if err != nil {
-		log.Error().AnErr("writeRespErr", err).Send()
+		s.log.Error().AnErr("writeRespErr", err).Send()
 		return err
 	}
 
-	log.Debug().Int64("bytesSent", n).Msg("response sent")
+	s.log.Debug().Int64("bytesSent", n).Msg("response sent")
 
 	return nil
 }
