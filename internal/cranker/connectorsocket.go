@@ -3,6 +3,7 @@ package cranker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -94,6 +95,13 @@ func (s *ConnectorSocket) dial(ctx context.Context) error {
 			Msg("wss connected")
 	}
 
+	if ctx.Err() != nil {
+		s.log.Debug().
+			AnErr("reason", ctx.Err()).Msg("connect is cancelled or timeout")
+
+		return ctx.Err()
+	}
+
 	if err != nil {
 		s.log.Error().
 			Str("error", err.Error()).
@@ -107,8 +115,8 @@ func (s *ConnectorSocket) dial(ctx context.Context) error {
 	return nil
 }
 
-// Start connection to cranker router and consume incoming requests.
-func (s *ConnectorSocket) Start() error {
+// Connect connection to cranker router and consume incoming requests.
+func (s *ConnectorSocket) Connect() error {
 	s.Close()
 
 	s.log.Info().
@@ -134,8 +142,7 @@ func (s *ConnectorSocket) Start() error {
 func (s *ConnectorSocket) nextRequest(ctx context.Context) (*http.Request, error) {
 	messageType, message, err := s.wss.Reader(ctx)
 	if err != nil {
-		s.log.Error().AnErr("err", err).Msg("error creating request headers reader")
-		return nil, err
+		return nil, fmt.Errorf("RequestReaderError: %w", err)
 	}
 
 	if messageType != websocket.MessageText {
@@ -144,13 +151,12 @@ func (s *ConnectorSocket) nextRequest(ctx context.Context) (*http.Request, error
 			Str("actualMessageType", "binaryMessage").
 			Msg("protocal error")
 
-		return nil, err
+		return nil, errors.New("CrankerProtoError: request not started with text message")
 	}
 
 	headerSize, err := message.Read(s.buf)
 	if err != nil && err != io.EOF {
-		s.log.Error().AnErr("err", err).Msg("error reading request headers")
-		return nil, err
+		return nil, fmt.Errorf("RequestReadError: %w", err)
 	}
 
 	s.log.Debug().Bytes("recv", s.buf[0:headerSize]).Msg("wss msg received")
@@ -168,30 +174,33 @@ func (s *ConnectorSocket) nextRequest(ctx context.Context) (*http.Request, error
 		s.log.Debug().Msg("request with body")
 		r, w := io.Pipe()
 		req, err = http.NewRequest(method, url, r)
-		go s.pumpRequestBody(ctx, w)
+		if err == nil {
+			go s.pumpRequestBody(ctx, w)
+		}
 	}
 
-	if err != nil {
-		s.log.Error().AnErr("err", err).Msg("error creating request")
-		return nil, err
-	}
-
-	return req, nil
+	return req, err
 }
 
-func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWriter) error {
+func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWriter) {
 	for {
 		s.log.Debug().Msg("draining request body")
 		messageType, message, err := s.wss.Reader(ctx)
 		if err != nil {
-			return err
+			s.log.Error().
+				AnErr("err", err).
+				Msg("failed to create reader for request body")
+			return
 		}
 
 		switch messageType {
 		case websocket.MessageBinary:
 			n, err := io.CopyBuffer(out, message, s.buf)
 			if err != nil {
-				return err
+				s.log.Error().
+					AnErr("err", err).
+					Msg("failed to send request body")
+				return
 			}
 
 			s.log.Debug().Int64("bytesSent", n).Msg("sending request body")
@@ -205,14 +214,17 @@ func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWrite
 			if n == 2 {
 				if bytes.Compare([]byte(markerReqBodyEnded), s.buf[0:2]) == 0 {
 					out.Close()
-					return nil
+					s.log.Debug().
+						Msg("request ended")
+					return
 				}
 			}
 
 			s.log.Error().Bytes("recv", s.buf[0:n]).Msg("protocal error: not a marker")
+
 			if err != nil || err != io.EOF {
 				s.log.Error().AnErr("err", err).Msg("error reading marker")
-				return err
+				return
 			}
 		}
 	}
@@ -224,7 +236,7 @@ func decomposeMethodAndURL(line string) (string, string) {
 }
 
 func (s *ConnectorSocket) handleRequest(ctx context.Context) error {
-	defer s.Start() // restart socket after servicing request
+	defer s.Connect() // restart socket after servicing request
 
 	s.log.Info().
 		Msg("waiting for request")
@@ -253,8 +265,7 @@ func (s *ConnectorSocket) handleRequest(ctx context.Context) error {
 func (s *ConnectorSocket) sendRequest(ctx context.Context, req *http.Request) (*http.Response, error) {
 	serviceURL, err := url.Parse(s.serviceURL)
 	if err != nil {
-		s.log.Error().AnErr("urlErr", err).Send()
-		return nil, err
+		return nil, fmt.Errorf("InvalidServiceURLError: %w", err)
 	}
 
 	req.URL = serviceURL.ResolveReference(req.URL)
@@ -281,16 +292,14 @@ func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response)
 	// write body in binary
 	w, err := s.wss.Writer(ctx, websocket.MessageBinary)
 	if err != nil {
-		s.log.Error().AnErr("writeRespErr", err).Msg("error creating resp writer")
-		return err
+		return fmt.Errorf("ResponseWriterError: %w", err)
 	}
 
 	defer w.Close()
 	n, err := io.CopyBuffer(w, resp.Body, s.buf)
 
 	if err != nil {
-		s.log.Error().AnErr("writeRespErr", err).Send()
-		return err
+		return fmt.Errorf("ResponseWriteError: %w", err)
 	}
 
 	s.log.Debug().Int64("bytesSent", n).Msg("response sent")

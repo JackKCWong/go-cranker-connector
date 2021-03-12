@@ -66,7 +66,7 @@ func (c *Connector) Connect(
 			c.connectorSockets = append(c.connectorSockets, cs)
 			go func() {
 				defer wgSockets.Done()
-				cs.Start()
+				cs.Connect()
 			}()
 		}
 	}
