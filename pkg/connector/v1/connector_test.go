@@ -2,6 +2,7 @@ package connector
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io/ioutil"
@@ -19,8 +20,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/UnnoTed/horizontal"
 	"time"
+
+	"github.com/UnnoTed/horizontal"
 )
 
 func setupLogger() {
@@ -110,8 +112,9 @@ func TestCanHandleGetRequest(t *testing.T) {
 	connector := newConnector()
 	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test1", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
-
-	defer connector.Shutdown()
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	defer connector.Shutdown(ctx)
 
 	req, _ := http.NewRequest("GET", "https://localhost:8443/test1/get", nil)
 	resp, err := testClient.Do(req)
@@ -128,7 +131,9 @@ func TestCanHandleReconnect(t *testing.T) {
 	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test1", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
-	defer connector.Shutdown()
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	defer connector.Shutdown(ctx)
 
 	for i := 0; i < 3; i++ {
 		req, _ := http.NewRequest("GET", "https://localhost:8443/test1/get", nil)
@@ -149,7 +154,9 @@ func TestCanHandlePostRequest(t *testing.T) {
 	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test2", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
-	defer connector.Shutdown()
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	defer connector.Shutdown(ctx)
 
 	resp, err := testClient.Post("https://localhost:8443/test2/post",
 		"text/plain",

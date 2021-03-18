@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-cranker/pkg/config"
 	"github.com/google/uuid"
@@ -21,18 +23,31 @@ const markerReqBodyPending = "_1"
 const markerReqHasNoBody = "_2"
 const markerReqBodyEnded = "_3"
 
+type Status int
+
+const (
+	NEW Status = iota
+	STARTED
+	STOPPED
+)
+
 // ConnectorSocket represents a connection to a cranker router
 type ConnectorSocket struct {
-	uuid          string
-	routerURL     string
-	serviceName   string
-	servicePrefix string
-	serviceURL    string
-	httpClient    *http.Client
-	wss           *websocket.Conn
-	buf           []byte
-	cancelfn      context.CancelFunc
-	log           zerolog.Logger
+	uuid            string
+	routerURL       string
+	serviceName     string
+	servicePrefix   string
+	serviceURL      string
+	httpClient      *http.Client
+	wss             *websocket.Conn
+	buf             []byte
+	log             zerolog.Logger
+	mux             *sync.Mutex
+	connectContext  context.Context
+	cancelReconnect context.CancelFunc
+	serviceContext  context.Context
+	cancelService   context.CancelFunc
+	status          Status
 }
 
 // NewConnectorSocket returns one new connection to a router URL.
@@ -40,6 +55,9 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 	config *config.RouterConfig, httpClient *http.Client) *ConnectorSocket {
 
 	uuid := uuid.New().String()
+	connCtx, cancelReconnect := context.WithCancel(context.Background())
+	serviceCtx, cancelService := context.WithCancel(context.Background())
+
 	return &ConnectorSocket{
 		log: log.With().
 			Str("socketId", uuid).
@@ -48,38 +66,55 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 			Str("serviceName", serviceName).
 			Logger(),
 
-		uuid:          uuid,
-		routerURL:     routerURL,
-		serviceName:   serviceName,
-		servicePrefix: "/" + serviceName,
-		serviceURL:    serviceURL,
-		httpClient:    httpClient,
-		buf:           make([]byte, 4*1024),
+		uuid:            uuid,
+		routerURL:       routerURL,
+		serviceName:     serviceName,
+		servicePrefix:   "/" + serviceName,
+		serviceURL:      serviceURL,
+		httpClient:      httpClient,
+		buf:             make([]byte, 4*1024),
+		mux:             &sync.Mutex{},
+		connectContext:  connCtx,
+		cancelReconnect: cancelReconnect,
+		serviceContext:  serviceCtx,
+		cancelService:   cancelService,
 	}
 }
 
 // Close the underlying websocket connection
-func (s *ConnectorSocket) Close() error {
-	if s.cancelfn != nil {
-		s.log.Debug().
-			Msg("canceling in-flight jobs")
+func (s *ConnectorSocket) Close(ctx context.Context) error {
+	s.mux.Lock()
+	defer s.mux.Unlock()
 
-		s.cancelfn()
-	}
+	s.cancelReconnect()
+	<-ctx.Done()
+	s.cancelService()
 
+	return nil
+}
+
+func (s *ConnectorSocket) disconnect() error {
+	s.status = STOPPED
 	if s.wss != nil {
 		s.log.Debug().
 			Msg("closing socket connection")
+
+		// I was tempted to set s.wss to nil after Close here.
+		// DON'T do it. It's better to read/write a closed connection and get an error
+		// than to panic on a nil pointer
 		return s.wss.Close(websocket.StatusNormalClosure, "close requested by client")
 	}
 
 	return nil
 }
 
-func (s *ConnectorSocket) dial(ctx context.Context) error {
+func (s *ConnectorSocket) dial(parent context.Context) error {
 	headers := http.Header{}
 	headers.Add("CrankerProtocol", "1.0")
 	headers.Add("Route", s.serviceName)
+
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
 
 	conn, resp, err := websocket.Dial(
 		ctx,
@@ -117,24 +152,35 @@ func (s *ConnectorSocket) dial(ctx context.Context) error {
 
 // Connect connection to cranker router and consume incoming requests.
 func (s *ConnectorSocket) Connect() error {
-	s.Close()
+	s.mux.Lock()
+	defer s.mux.Unlock()
 
-	s.log.Info().
-		Msg("socket starting")
+	if s.status == STARTED {
+		return errors.New("IllegalStatus: socket already started")
+	}
 
-	ctx, cancelfn := context.WithCancel(context.Background())
-	s.cancelfn = cancelfn
-	err := s.dial(ctx)
+	s.status = STARTED
 
+	s.log.Info().Msg("socket starting")
+
+	err := s.dial(s.connectContext)
 	if err != nil {
 		s.log.Error().AnErr("err", err).Msg("error dialing")
 		return err
 	}
 
-	go s.handleRequest(ctx)
+	go func() {
+		s.handleRequest(s.serviceContext)
+		select {
+		case <-s.connectContext.Done():
+			s.log.Info().Msg("reconnect cancelled")
+		default:
+			s.log.Info().Msg("reconnecting")
+			s.Connect()
+		}
+	}()
 
-	s.log.Info().
-		Msg("socket started")
+	s.log.Info().Msg("socket started")
 
 	return nil
 }
@@ -235,8 +281,8 @@ func decomposeMethodAndURL(line string) (string, string) {
 	return parts[0], parts[1]
 }
 
-func (s *ConnectorSocket) handleRequest(ctx context.Context) error {
-	defer s.Connect() // restart socket after servicing request
+func (s *ConnectorSocket) handleRequest(ctx context.Context) {
+	defer s.disconnect()
 
 	s.log.Info().
 		Msg("waiting for request")
@@ -244,22 +290,20 @@ func (s *ConnectorSocket) handleRequest(ctx context.Context) error {
 	req, err := s.nextRequest(ctx)
 	if err != nil {
 		s.log.Error().AnErr("readReqErr", err).Msg("error reading request")
-		return err
+		return
 	}
 
 	resp, err := s.sendRequest(ctx, req)
 	if err != nil {
 		s.log.Error().AnErr("reqErr", err).Msg("error sending request")
-		return err
+		return
 	}
 
 	err = s.sendResponse(ctx, resp)
 	if err != nil {
 		s.log.Error().AnErr("respErr", err).Msg("error sending response")
-		return err
+		return
 	}
-
-	return nil
 }
 
 func (s *ConnectorSocket) sendRequest(ctx context.Context, req *http.Request) (*http.Response, error) {
@@ -279,8 +323,8 @@ func (s *ConnectorSocket) sendRequest(ctx context.Context, req *http.Request) (*
 }
 
 func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response) error {
-	defer s.Close()
 	defer resp.Body.Close()
+
 	var headerBuf bytes.Buffer
 	fmt.Fprintf(&headerBuf, "%s %s\r\n", resp.Proto, resp.Status)
 	resp.Header.Write(&headerBuf)

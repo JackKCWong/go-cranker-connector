@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"sync"
@@ -17,6 +18,7 @@ type Connector struct {
 	httpClient       *http.Client
 	routerConfig     *config.RouterConfig
 	connectorSockets []*cranker.ConnectorSocket
+	mux              *sync.Mutex
 }
 
 // NewConnector returns a new Connector
@@ -25,6 +27,7 @@ func NewConnector(rc *config.RouterConfig, sc *config.ServiceConfig) *Connector 
 	return &Connector{
 		routerConfig: rc,
 		httpClient:   sc.HTTPClient,
+		mux:          &sync.Mutex{},
 	}
 }
 
@@ -32,6 +35,8 @@ func NewConnector(rc *config.RouterConfig, sc *config.ServiceConfig) *Connector 
 func (c *Connector) Connect(
 	routerURLs []string, slidingWindow int,
 	serviceName string, serviceURL string) error {
+
+	c.mux.Lock()
 
 	var err error
 	c.serviceURL, err = url.Parse(serviceURL)
@@ -42,6 +47,7 @@ func (c *Connector) Connect(
 
 	noOfRouterURLs := len(routerURLs)
 	c.routerURLs = make([]*url.URL, noOfRouterURLs)
+
 	for i := 0; i < noOfRouterURLs; i++ {
 		c.routerURLs[i], err = url.Parse(routerURLs[i])
 		if err != nil {
@@ -49,16 +55,15 @@ func (c *Connector) Connect(
 		}
 	}
 
+	c.connectorSockets = make([]*cranker.ConnectorSocket, 0, noOfRouterURLs*slidingWindow)
 	var wgSockets sync.WaitGroup
-
-	c.connectorSockets = make([]*cranker.ConnectorSocket,0, noOfRouterURLs*slidingWindow)
 
 	for i := 0; i < noOfRouterURLs; i++ {
 		for j := 0; j < slidingWindow; j++ {
 			cs := cranker.NewConnectorSocket(
 				c.routerURLs[i].String(),
 				serviceName,
-				c.serviceURL.String(),
+				serviceURL,
 				c.routerConfig,
 				c.httpClient)
 
@@ -71,23 +76,31 @@ func (c *Connector) Connect(
 		}
 	}
 
+	c.mux.Unlock()
+
 	wgSockets.Wait()
 
 	return nil
 }
 
 // Shutdown stops and clean up all sockets
-func (c *Connector) Shutdown() error {
+func (c *Connector) Shutdown(ctx context.Context) {
 	defer log.Info().Msg("connector destroyed")
 
 	log.Info().
 		Int("sockets", len(c.connectorSockets)).
 		Msg("destroying connector")
 
-	for _, cs := range c.connectorSockets {
-		log.Debug().Interface("socket", cs).Msg("closing connector socket")
-		cs.Close()
-	}
+	c.mux.Lock()
+	defer c.mux.Unlock()
 
-	return nil
+	for _, s := range c.connectorSockets {
+		go close(ctx, s)
+	}
+}
+
+func close(parent context.Context, s *cranker.ConnectorSocket) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	s.Close(ctx)
 }
