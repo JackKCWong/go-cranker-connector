@@ -128,14 +128,14 @@ func TestCanHandleGetRequest(t *testing.T) {
 func TestCanHandleReconnect(t *testing.T) {
 	assert := assert.New(t)
 	connector := newConnector()
-	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test1", testServer.URL)
+	err := connector.Connect([]string{"wss://localhost:16489"}, 2, "test1", testServer.URL)
 	assert.Nilf(err, "failed to connect to cranker")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	defer connector.Shutdown(ctx)
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 6; i++ {
 		req, _ := http.NewRequest("GET", "https://localhost:8443/test1/get", nil)
 		resp, err := testClient.Do(req)
 
