@@ -1,4 +1,4 @@
-module github.com/go-cranker
+module github.com/go-cranker-connector
 
 go 1.15
 
