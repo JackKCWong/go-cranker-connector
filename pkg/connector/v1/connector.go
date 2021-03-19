@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"sync"
 
-	"github.com/go-cranker/internal/cranker"
-	"github.com/go-cranker/pkg/config"
+	"github.com/go-cranker-connector/internal/cranker"
+	"github.com/go-cranker-connector/pkg/config"
 	"github.com/rs/zerolog/log"
 )
 
@@ -37,6 +37,7 @@ func (c *Connector) Connect(
 	serviceName string, serviceURL string) error {
 
 	c.mux.Lock()
+	defer c.mux.Unlock()
 
 	var err error
 	c.serviceURL, err = url.Parse(serviceURL)
@@ -75,8 +76,6 @@ func (c *Connector) Connect(
 			}()
 		}
 	}
-
-	c.mux.Unlock()
 
 	wgSockets.Wait()
 
