@@ -111,46 +111,65 @@ func (s *ConnectorSocket) disconnect() error {
 	return nil
 }
 
-func (s *ConnectorSocket) dial(parent context.Context) error {
+func (s *ConnectorSocket) dial() error {
 	headers := http.Header{}
 	headers.Add("CrankerProtocol", "1.0")
 	headers.Add("Route", s.serviceName)
 
-	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
-	defer cancel()
+	backoff := 2
+	for {
+		select {
+		case <-s.connectContext.Done():
+			s.log.Debug().
+				Msg("connect is cancelled")
+			return errors.New("ConnectCancelledErr")
+		default:
+			ctx, cancel := context.WithTimeout(s.connectContext, 30*time.Second)
+			defer cancel()
+			conn, resp, err := websocket.Dial(
+				ctx,
+				fmt.Sprintf("%s/%s", s.routerURL, "register"),
+				&websocket.DialOptions{
+					HTTPClient: s.httpClient,
+					HTTPHeader: headers,
+				})
 
-	conn, resp, err := websocket.Dial(
-		ctx,
-		fmt.Sprintf("%s/%s", s.routerURL, "register"),
-		&websocket.DialOptions{
-			HTTPClient: s.httpClient,
-			HTTPHeader: headers,
-		})
+			if ctx.Err() != nil {
+				s.log.Debug().
+					AnErr("reason", ctx.Err()).Msg("connect is cancelled or timeout")
 
-	if resp != nil {
-		s.log.Debug().
-			Str("status", resp.Status).
-			Msg("wss connected")
+				cancel()
+				continue
+			}
+
+			if err != nil {
+				s.log.Error().
+					Str("error", err.Error()).
+					Msgf("failed to connect to cranker router, retrying in %d seconds", backoff)
+
+				cancel()
+
+				<-time.After(time.Duration(backoff) * time.Second)
+
+				backoff = backoff * 2
+				if backoff > 30 {
+					backoff = 30
+				}
+
+				continue
+			}
+
+			if resp != nil {
+				s.log.Debug().
+					Str("status", resp.Status).
+					Msg("wss connected")
+
+				s.wss = conn
+				return nil
+			}
+
+		}
 	}
-
-	if ctx.Err() != nil {
-		s.log.Debug().
-			AnErr("reason", ctx.Err()).Msg("connect is cancelled or timeout")
-
-		return ctx.Err()
-	}
-
-	if err != nil {
-		s.log.Error().
-			Str("error", err.Error()).
-			Msg("failed to connect to cranker router")
-
-		return err
-	}
-
-	s.wss = conn
-
-	return nil
 }
 
 // Connect connection to cranker router and consume incoming requests.
@@ -166,7 +185,7 @@ func (s *ConnectorSocket) Connect() error {
 
 	s.log.Info().Msg("socket starting")
 
-	err := s.dial(s.connectContext)
+	err := s.dial()
 	if err != nil {
 		s.log.Error().AnErr("err", err).Msg("error dialing")
 		return err

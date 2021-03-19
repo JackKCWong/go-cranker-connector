@@ -10,6 +10,10 @@ go get github.com/JackKCWong/go-cranker-connector
 ```
 
 
+## usage
+
+see `main.go`.
+
 ## TODOs
 
 [] graceful shutdown, hand waving with cranker.
