@@ -33,7 +33,7 @@ const (
 
 // ConnectorSocket represents a connection to a cranker router
 type ConnectorSocket struct {
-	uuid            string
+	UUID            string
 	routerURL       string
 	serviceName     string
 	servicePrefix   string
@@ -66,7 +66,7 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 			Str("serviceName", serviceName).
 			Logger(),
 
-		uuid:            uuid,
+		UUID:            uuid,
 		routerURL:       routerURL,
 		serviceName:     serviceName,
 		servicePrefix:   "/" + serviceName,
@@ -87,8 +87,11 @@ func (s *ConnectorSocket) Close(ctx context.Context) error {
 	defer s.mux.Unlock()
 
 	s.cancelReconnect()
-	<-ctx.Done()
 	s.cancelService()
+
+	<-ctx.Done()
+
+	s.disconnect()
 
 	return nil
 }

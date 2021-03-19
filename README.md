@@ -4,6 +4,13 @@ a golang port of [Crank4j](https://github.com/danielflower/crank4j)'s [connector
 
 
 ## install
+
 ```bash
 go get github.com/JackKCWong/go-cranker-connector
 ```
+
+
+## TODOs
+
+[] graceful shutdown, hand waving with cranker.
+[] documentation

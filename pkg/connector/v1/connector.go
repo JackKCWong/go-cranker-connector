@@ -97,8 +97,8 @@ func (c *Connector) Shutdown(ctx context.Context) {
 	for _, s := range c.connectorSockets {
 		wg.Add(1)
 		go func(s *cranker.ConnectorSocket) {
+			defer wg.Done()
 			close(ctx, s)
-			wg.Done()
 		}(s)
 	}
 
@@ -108,5 +108,7 @@ func (c *Connector) Shutdown(ctx context.Context) {
 func close(parent context.Context, s *cranker.ConnectorSocket) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	log.Info().Str("socketId", s.UUID).Msg("socket closing")
 	s.Close(ctx)
+	log.Info().Str("socketId", s.UUID).Msg("socket closed")
 }
