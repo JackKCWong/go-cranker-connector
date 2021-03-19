@@ -93,9 +93,16 @@ func (c *Connector) Shutdown(ctx context.Context) {
 	c.mux.Lock()
 	defer c.mux.Unlock()
 
+	var wg sync.WaitGroup
 	for _, s := range c.connectorSockets {
-		go close(ctx, s)
+		wg.Add(1)
+		go func(s *cranker.ConnectorSocket) {
+			close(ctx, s)
+			wg.Done()
+		}(s)
 	}
+
+	wg.Wait()
 }
 
 func close(parent context.Context, s *cranker.ConnectorSocket) {
