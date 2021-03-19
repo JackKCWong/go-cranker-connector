@@ -12,9 +12,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/go-cranker-connector/pkg/config"
+	"github.com/JackKCWong/go-cranker-connector/pkg/config"
 
-	"github.com/go-cranker-connector/internal/util"
+	"github.com/JackKCWong/go-cranker-connector/internal/util"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/rs/zerolog"

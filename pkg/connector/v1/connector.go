@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"sync"
 
-	"github.com/go-cranker-connector/internal/cranker"
-	"github.com/go-cranker-connector/pkg/config"
+	"github.com/JackKCWong/go-cranker-connector/internal/cranker"
+	"github.com/JackKCWong/go-cranker-connector/pkg/config"
 	"github.com/rs/zerolog/log"
 )
 

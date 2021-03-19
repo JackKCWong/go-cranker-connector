@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-cranker-connector/pkg/config"
+	"github.com/JackKCWong/go-cranker-connector/pkg/config"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"

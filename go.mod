@@ -1,6 +1,6 @@
-module github.com/go-cranker-connector
+module github.com/JackKCWong/go-cranker-connector
 
-go 1.15
+go 1.14
 
 require (
 	github.com/UnnoTed/horizontal v0.0.0-20210214010602-906c695f4c68
