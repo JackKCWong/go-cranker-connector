@@ -49,6 +49,7 @@ type ConnectorSocket struct {
 	serviceContext  context.Context
 	cancelService   context.CancelFunc
 	status          Status
+	chDone          chan int
 }
 
 // NewConnectorSocket returns one new connection to a router URL.
@@ -79,6 +80,7 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 		cancelReconnect: cancelReconnect,
 		serviceContext:  serviceCtx,
 		cancelService:   cancelService,
+		chDone:          make(chan int, 1),
 	}
 }
 
@@ -90,7 +92,12 @@ func (s *ConnectorSocket) Close(ctx context.Context) error {
 	s.cancelReconnect()
 	s.cancelService()
 
-	<-ctx.Done()
+	select {
+	case <-s.chDone:
+		log.Info().Msg("closing gracefully")
+	case <-ctx.Done():
+		log.Info().Msg("close timeout. disconnecting forcefully...")
+	}
 
 	s.disconnect()
 
@@ -101,8 +108,10 @@ func (s *ConnectorSocket) disconnect() error {
 	s.status = STOPPED
 	if s.wss != nil {
 		s.log.Debug().
-			Msg("closing socket connection")
+			Msg("socket connection closing")
 
+		defer s.log.Debug().
+			Msg("socket connection closed")
 		// I was tempted to set s.wss to nil after Close here.
 		// DON'T do it. It's better to read/write a closed connection and get an error
 		// than to panic on a nil pointer
@@ -195,6 +204,7 @@ func (s *ConnectorSocket) Connect() error {
 		select {
 		case <-s.connectContext.Done():
 			s.log.Info().Msg("reconnect cancelled")
+			s.chDone <- 0
 		default:
 			s.log.Info().Msg("reconnecting")
 			s.Connect()
