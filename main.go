@@ -39,12 +39,6 @@ func main() {
 	serviceName := os.Args[2]
 	serviceURL := os.Args[3]
 
-	err := conn.Connect([]string{crankerWss}, 2, serviceName, serviceURL)
-	if err != nil {
-		fmt.Printf("Error connecting cranker %s, err: %q", crankerWss, err)
-		return
-	}
-
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	var wg sync.WaitGroup
@@ -59,6 +53,13 @@ func main() {
 		log.Info().Msg("shutdown finished")
 	}()
 
+	err := conn.Connect([]string{crankerWss}, 2, serviceName, serviceURL)
+	if err != nil {
+		fmt.Printf("Error connecting cranker %s, err: %q", crankerWss, err)
+		return
+	}
+
 	wg.Wait()
+
 	os.Exit(0)
 }

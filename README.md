@@ -16,5 +16,7 @@ see `main.go`.
 
 ## TODOs
 
-[] graceful shutdown, hand waving with cranker.
-[] documentation
+[ ] graceful shutdown, hand waving with cranker.
+
+[ ] documentation
+

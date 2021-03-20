@@ -37,7 +37,6 @@ func (c *Connector) Connect(
 	serviceName string, serviceURL string) error {
 
 	c.mux.Lock()
-	defer c.mux.Unlock()
 
 	var err error
 	c.serviceURL, err = url.Parse(serviceURL)
@@ -76,6 +75,8 @@ func (c *Connector) Connect(
 			}()
 		}
 	}
+
+	c.mux.Unlock() // unlock before wait to allow Shutdown with cancel / timeout
 
 	wgSockets.Wait()
 

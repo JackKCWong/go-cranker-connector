@@ -122,10 +122,12 @@ func (s *ConnectorSocket) dial() error {
 		case <-s.connectContext.Done():
 			s.log.Debug().
 				Msg("connect is cancelled")
+
 			return errors.New("ConnectCancelledErr")
+
 		default:
 			ctx, cancel := context.WithTimeout(s.connectContext, 30*time.Second)
-			defer cancel()
+			s.mux.Lock()
 			conn, resp, err := websocket.Dial(
 				ctx,
 				fmt.Sprintf("%s/%s", s.routerURL, "register"),
@@ -134,40 +136,35 @@ func (s *ConnectorSocket) dial() error {
 					HTTPHeader: headers,
 				})
 
-			if ctx.Err() != nil {
-				s.log.Debug().
-					AnErr("reason", ctx.Err()).Msg("connect is cancelled or timeout")
-
-				cancel()
-				continue
-			}
+			cancel()
 
 			if err != nil {
+				s.mux.Unlock()
+
 				s.log.Error().
 					Str("error", err.Error()).
 					Msgf("failed to connect to cranker router, retrying in %d seconds", backoff)
 
-				cancel()
-
-				<-time.After(time.Duration(backoff) * time.Second)
-
+				time.Sleep(time.Duration(backoff) * time.Second)
 				backoff = backoff * 2
 				if backoff > 30 {
 					backoff = 30
 				}
 
 				continue
-			}
-
-			if resp != nil {
+			} else if resp != nil {
 				s.log.Debug().
 					Str("status", resp.Status).
 					Msg("wss connected")
 
 				s.wss = conn
-				return nil
-			}
 
+				s.mux.Unlock()
+				return nil
+			} else {
+				// timeout or cancelled
+				continue
+			}
 		}
 	}
 }
@@ -175,13 +172,14 @@ func (s *ConnectorSocket) dial() error {
 // Connect connection to cranker router and consume incoming requests.
 func (s *ConnectorSocket) Connect() error {
 	s.mux.Lock()
-	defer s.mux.Unlock()
 
 	if s.status == STARTED {
 		return errors.New("IllegalStatus: socket already started")
 	}
 
 	s.status = STARTED
+
+	s.mux.Unlock()
 
 	s.log.Info().Msg("socket starting")
 
@@ -192,7 +190,7 @@ func (s *ConnectorSocket) Connect() error {
 	}
 
 	go func() {
-		s.handleRequest(s.serviceContext)
+		s.handleRequest()
 		select {
 		case <-s.connectContext.Done():
 			s.log.Info().Msg("reconnect cancelled")
@@ -207,8 +205,8 @@ func (s *ConnectorSocket) Connect() error {
 	return nil
 }
 
-func (s *ConnectorSocket) nextRequest(ctx context.Context) (*http.Request, error) {
-	messageType, message, err := s.wss.Reader(ctx)
+func (s *ConnectorSocket) nextRequest() (*http.Request, error) {
+	messageType, message, err := s.wss.Reader(s.connectContext)
 	if err != nil {
 		return nil, fmt.Errorf("RequestReaderError: %w", err)
 	}
@@ -237,23 +235,23 @@ func (s *ConnectorSocket) nextRequest(ctx context.Context) (*http.Request, error
 	marker := s.buf[headerSize-2 : headerSize]
 	if bytes.Compare(marker, []byte(markerReqHasNoBody)) == 0 {
 		s.log.Debug().Msg("request without body")
-		req, err = http.NewRequest(method, url, nil)
+		req, err = http.NewRequestWithContext(s.serviceContext, method, url, nil)
 	} else {
 		s.log.Debug().Msg("request with body")
 		r, w := io.Pipe()
-		req, err = http.NewRequest(method, url, r)
+		req, err = http.NewRequestWithContext(s.serviceContext, method, url, r)
 		if err == nil {
-			go s.pumpRequestBody(ctx, w)
+			go s.pumpRequestBody(w)
 		}
 	}
 
 	return req, err
 }
 
-func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWriter) {
+func (s *ConnectorSocket) pumpRequestBody(out *io.PipeWriter) {
 	for {
 		s.log.Debug().Msg("draining request body")
-		messageType, message, err := s.wss.Reader(ctx)
+		messageType, message, err := s.wss.Reader(s.serviceContext)
 		if err != nil {
 			s.log.Error().
 				AnErr("err", err).
@@ -303,32 +301,32 @@ func decomposeMethodAndURL(line string) (string, string) {
 	return parts[0], parts[1]
 }
 
-func (s *ConnectorSocket) handleRequest(ctx context.Context) {
+func (s *ConnectorSocket) handleRequest() {
 	defer s.disconnect()
 
 	s.log.Info().
 		Msg("waiting for request")
 
-	req, err := s.nextRequest(ctx)
+	req, err := s.nextRequest()
 	if err != nil {
 		s.log.Error().AnErr("readReqErr", err).Msg("error reading request")
 		return
 	}
 
-	resp, err := s.sendRequest(ctx, req)
+	resp, err := s.sendRequest(req)
 	if err != nil {
 		s.log.Error().AnErr("reqErr", err).Msg("error sending request")
 		return
 	}
 
-	err = s.sendResponse(ctx, resp)
+	err = s.sendResponse(resp)
 	if err != nil {
 		s.log.Error().AnErr("respErr", err).Msg("error sending response")
 		return
 	}
 }
 
-func (s *ConnectorSocket) sendRequest(ctx context.Context, req *http.Request) (*http.Response, error) {
+func (s *ConnectorSocket) sendRequest(req *http.Request) (*http.Response, error) {
 	serviceURL, err := url.Parse(s.serviceURL)
 	if err != nil {
 		return nil, fmt.Errorf("InvalidServiceURLError: %w", err)
@@ -344,7 +342,7 @@ func (s *ConnectorSocket) sendRequest(ctx context.Context, req *http.Request) (*
 	return s.httpClient.Do(req)
 }
 
-func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response) error {
+func (s *ConnectorSocket) sendResponse(resp *http.Response) error {
 	defer resp.Body.Close()
 
 	var headerBuf bytes.Buffer
@@ -353,10 +351,10 @@ func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response)
 	s.log.Debug().Bytes("respHeader", headerBuf.Bytes()).Msg("sending response headers")
 
 	// write headers in text
-	err := s.wss.Write(ctx, websocket.MessageText, headerBuf.Bytes())
+	err := s.wss.Write(s.serviceContext, websocket.MessageText, headerBuf.Bytes())
 
 	// write body in binary
-	w, err := s.wss.Writer(ctx, websocket.MessageBinary)
+	w, err := s.wss.Writer(s.serviceContext, websocket.MessageBinary)
 	if err != nil {
 		return fmt.Errorf("ResponseWriterError: %w", err)
 	}
