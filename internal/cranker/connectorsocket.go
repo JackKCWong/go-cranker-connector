@@ -126,7 +126,8 @@ func (s *ConnectorSocket) dial() error {
 	headers.Add("CrankerProtocol", "1.0")
 	headers.Add("Route", s.serviceName)
 
-	backoff := 2
+	backoff := 1
+	retryCount := 0
 	for {
 		select {
 		case <-s.connectContext.Done():
@@ -136,6 +137,27 @@ func (s *ConnectorSocket) dial() error {
 			return errors.New("ConnectCancelledErr")
 
 		default:
+			retryCount++
+			if retryCount > 1 {
+				backoff = backoff * 2
+				if backoff > 30 {
+					backoff = 30
+				}
+				ctx, cancel := context.WithTimeout(s.connectContext, time.Duration(backoff)*time.Second)
+				<-ctx.Done()
+				cancel()
+				if s.connectContext.Err() != nil {
+					// cancelled
+					s.log.Info().Msg("stopped connecting to cranker")
+					return ctx.Err()
+				}
+
+				s.log.Info().
+					Int("retry", retryCount).
+					Int("interval", backoff).
+					Msg("reconnecting to cranker...")
+			}
+
 			ctx, cancel := context.WithTimeout(s.connectContext, 30*time.Second)
 			s.mux.Lock()
 			conn, resp, err := websocket.Dial(
@@ -148,18 +170,13 @@ func (s *ConnectorSocket) dial() error {
 
 			cancel()
 
-			if err != nil {
-				s.mux.Unlock()
+			s.wss = conn
+			s.mux.Unlock()
 
+			if err != nil {
 				s.log.Error().
 					Str("error", err.Error()).
-					Msgf("failed to connect to cranker router, retrying in %d seconds", backoff)
-
-				time.Sleep(time.Duration(backoff) * time.Second)
-				backoff = backoff * 2
-				if backoff > 30 {
-					backoff = 30
-				}
+					Msg("failed to connect to cranker router")
 
 				continue
 			} else if resp != nil {
@@ -167,9 +184,6 @@ func (s *ConnectorSocket) dial() error {
 					Str("status", resp.Status).
 					Msg("wss connected")
 
-				s.wss = conn
-
-				s.mux.Unlock()
 				return nil
 			} else {
 				// timeout or cancelled
@@ -196,6 +210,7 @@ func (s *ConnectorSocket) Connect() error {
 	err := s.dial()
 	if err != nil {
 		s.log.Error().AnErr("err", err).Msg("error dialing")
+		s.chDone <- 0
 		return err
 	}
 
@@ -203,10 +218,10 @@ func (s *ConnectorSocket) Connect() error {
 		s.handleRequest()
 		select {
 		case <-s.connectContext.Done():
-			s.log.Info().Msg("reconnect cancelled")
+			s.log.Info().Msg("rejoin cancelled")
 			s.chDone <- 0
 		default:
-			s.log.Info().Msg("reconnecting")
+			s.log.Info().Msg("rejoining...")
 			s.Connect()
 		}
 	}()
