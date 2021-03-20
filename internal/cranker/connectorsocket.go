@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
@@ -126,7 +127,7 @@ func (s *ConnectorSocket) dial() error {
 	headers.Add("CrankerProtocol", "1.0")
 	headers.Add("Route", s.serviceName)
 
-	backoff := 1
+	backoff := 5000
 	retryCount := 0
 	for {
 		select {
@@ -140,22 +141,22 @@ func (s *ConnectorSocket) dial() error {
 			retryCount++
 			if retryCount > 1 {
 				backoff = backoff * 2
-				if backoff > 30 {
-					backoff = 30
+				if backoff > 300000 {
+					// spread the reconnect over 100s to avoid reconnection storm.
+					backoff = 300000 + rand.Intn(100000)
 				}
-				ctx, cancel := context.WithTimeout(s.connectContext, time.Duration(backoff)*time.Second)
+				s.log.Info().
+					Int("retry", retryCount).
+					Int("backoff", backoff).
+					Msg("reconnecting to cranker")
+
+				ctx, cancel := context.WithTimeout(s.connectContext, time.Duration(backoff)*time.Millisecond)
 				<-ctx.Done()
 				cancel()
 				if s.connectContext.Err() != nil {
 					// cancelled
-					s.log.Info().Msg("stopped connecting to cranker")
 					return ctx.Err()
 				}
-
-				s.log.Info().
-					Int("retry", retryCount).
-					Int("interval", backoff).
-					Msg("reconnecting to cranker...")
 			}
 
 			ctx, cancel := context.WithTimeout(s.connectContext, 30*time.Second)
