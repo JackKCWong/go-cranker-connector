@@ -18,5 +18,6 @@ see `main.go`.
 
 - [x] retry connection with exp backoff. 
 - [ ] graceful shutdown: hand waving with cranker.
+- [ ] health monitoring
+- [ ] dns discovery
 - [ ] documentation
-
