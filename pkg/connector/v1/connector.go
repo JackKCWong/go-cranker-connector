@@ -15,19 +15,18 @@ import (
 type Connector struct {
 	routerURLs       []*url.URL
 	serviceURL       *url.URL
-	httpClient       *http.Client
+	serviceFacingHC  *http.Client
 	routerConfig     *config.RouterConfig
 	connectorSockets []*cranker.ConnectorSocket
 	mux              *sync.Mutex
 }
 
 // NewConnector returns a new Connector
-// NewConnectorWithConfig creates a Connector with custom config
 func NewConnector(rc *config.RouterConfig, sc *config.ServiceConfig) *Connector {
 	return &Connector{
 		routerConfig: rc,
-		httpClient:   sc.HTTPClient,
-		mux:          &sync.Mutex{},
+		serviceFacingHC: sc.HTTPClient,
+		mux:             &sync.Mutex{},
 	}
 }
 
@@ -65,7 +64,7 @@ func (c *Connector) Connect(
 				serviceName,
 				serviceURL,
 				c.routerConfig,
-				c.httpClient)
+				c.serviceFacingHC)
 
 			wgSockets.Add(1)
 			c.connectorSockets = append(c.connectorSockets, cs)

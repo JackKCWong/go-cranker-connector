@@ -40,7 +40,8 @@ type ConnectorSocket struct {
 	serviceName     string
 	servicePrefix   string
 	serviceURL      string
-	httpClient      *http.Client
+	serviceFacingHC *http.Client
+	crankerFacingHC *http.Client
 	wss             *websocket.Conn
 	buf             []byte
 	log             zerolog.Logger
@@ -55,7 +56,7 @@ type ConnectorSocket struct {
 
 // NewConnectorSocket returns one new connection to a router URL.
 func NewConnectorSocket(routerURL, serviceName, serviceURL string,
-	config *config.RouterConfig, httpClient *http.Client) *ConnectorSocket {
+	rc *config.RouterConfig, serviceFacingHC *http.Client) *ConnectorSocket {
 
 	uuid := uuid.New().String()
 	connCtx, cancelReconnect := context.WithCancel(context.Background())
@@ -74,7 +75,11 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 		serviceName:     serviceName,
 		servicePrefix:   "/" + serviceName,
 		serviceURL:      serviceURL,
-		httpClient:      httpClient,
+		serviceFacingHC: serviceFacingHC,
+		crankerFacingHC: &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: rc.TLSClientConfig,
+			}},
 		buf:             make([]byte, 4*1024),
 		mux:             &sync.Mutex{},
 		connectContext:  connCtx,
@@ -165,7 +170,7 @@ func (s *ConnectorSocket) dial() error {
 				ctx,
 				fmt.Sprintf("%s/%s", s.routerURL, "register"),
 				&websocket.DialOptions{
-					HTTPClient: s.httpClient,
+					HTTPClient: s.crankerFacingHC,
 					HTTPHeader: headers,
 				})
 
@@ -375,7 +380,7 @@ func (s *ConnectorSocket) sendRequest(req *http.Request) (*http.Response, error)
 		Str("reqURL", req.URL.String()).
 		Msg("prep req url")
 
-	return s.httpClient.Do(req)
+	return s.serviceFacingHC.Do(req)
 }
 
 func (s *ConnectorSocket) sendResponse(resp *http.Response) error {
