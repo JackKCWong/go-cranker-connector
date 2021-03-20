@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strings"
@@ -315,8 +316,17 @@ func (s *ConnectorSocket) handleRequest() {
 
 	resp, err := s.sendRequest(req)
 	if err != nil {
-		s.log.Error().AnErr("reqErr", err).Msg("error sending request")
-		return
+		errId := uuid.NewString()
+		s.log.Error().
+			AnErr("reqErr", err).
+			Str("errorId", errId).
+			Msg("error sending request")
+
+		resp = &http.Response{
+			Status:     "500 Server Error",
+			StatusCode: 500,
+			Body:       ioutil.NopCloser(bytes.NewBufferString(fmt.Sprintf("errorId=%s\n", errId))),
+		}
 	}
 
 	err = s.sendResponse(resp)
