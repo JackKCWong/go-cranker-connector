@@ -16,7 +16,7 @@ see `main.go`.
 
 ## TODOs
 
-[ ] graceful shutdown, hand waving with cranker.
-
+[x] retry connection with exp backoff. 
+[ ] graceful shutdown: hand waving with cranker.
 [ ] documentation
 
