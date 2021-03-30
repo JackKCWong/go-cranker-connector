@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/JackKCWong/go-cranker-connector/pkg/config"
@@ -25,10 +26,8 @@ const markerReqBodyPending = "_1"
 const markerReqHasNoBody = "_2"
 const markerReqBodyEnded = "_3"
 
-type Status int
-
 const (
-	NEW Status = iota
+	NEW int32 = iota
 	STARTED
 	STOPPED
 )
@@ -50,7 +49,7 @@ type ConnectorSocket struct {
 	cancelReconnect context.CancelFunc
 	serviceContext  context.Context
 	cancelService   context.CancelFunc
-	status          Status
+	status          int32 
 	chDone          chan int
 }
 
@@ -111,7 +110,10 @@ func (s *ConnectorSocket) Close(ctx context.Context) error {
 }
 
 func (s *ConnectorSocket) disconnect() error {
-	s.status = STOPPED
+	if !atomic.CompareAndSwapInt32(&s.status, s.status, STOPPED) {
+		return errors.New("socket already closed")
+	}
+
 	if s.wss != nil {
 		s.log.Debug().
 			Msg("socket connection closing")
@@ -201,15 +203,10 @@ func (s *ConnectorSocket) dial() error {
 
 // Connect connection to cranker router and consume incoming requests.
 func (s *ConnectorSocket) Connect() error {
-	s.mux.Lock()
 
-	if s.status == STARTED {
+	if !atomic.CompareAndSwapInt32(&s.status, s.status, STARTED) {
 		return errors.New("IllegalStatus: socket already started")
 	}
-
-	s.status = STARTED
-
-	s.mux.Unlock()
 
 	s.log.Info().Msg("socket starting")
 
