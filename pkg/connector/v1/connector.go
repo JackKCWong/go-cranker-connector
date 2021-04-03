@@ -105,9 +105,7 @@ func (c *Connector) Shutdown(ctx context.Context) {
 	wg.Wait()
 }
 
-func close(parent context.Context, s *cranker.ConnectorSocket) {
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
+func close(ctx context.Context, s *cranker.ConnectorSocket) {
 	log.Info().Str("socketId", s.UUID).Msg("socket closing")
 	s.Close(ctx)
 	log.Info().Str("socketId", s.UUID).Msg("socket closed")

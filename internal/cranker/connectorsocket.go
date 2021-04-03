@@ -1,6 +1,7 @@
 package cranker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -10,11 +11,11 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/JackKCWong/go-cranker-connector/internal/util"
 	"github.com/JackKCWong/go-cranker-connector/pkg/config"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -32,6 +33,8 @@ const (
 	STOPPED
 )
 
+type SigChan chan struct{}
+
 // ConnectorSocket represents a connection to a cranker router
 type ConnectorSocket struct {
 	UUID            string
@@ -41,16 +44,12 @@ type ConnectorSocket struct {
 	serviceURL      string
 	serviceFacingHC *http.Client
 	crankerFacingHC *http.Client
-	wss             *websocket.Conn
-	buf             []byte
+	buffers         *sync.Pool
 	log             zerolog.Logger
-	mux             *sync.Mutex
-	connectContext  context.Context
-	cancelReconnect context.CancelFunc
-	serviceContext  context.Context
-	cancelService   context.CancelFunc
-	status          int32 
-	chDone          chan int
+	sigTERM         *util.Flare
+	sigKILL         *util.Flare
+	sigDONE         *util.Flare
+	status          int32
 }
 
 // NewConnectorSocket returns one new connection to a router URL.
@@ -58,8 +57,6 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 	rc *config.RouterConfig, serviceFacingHC *http.Client) *ConnectorSocket {
 
 	uuid := uuid.New().String()
-	connCtx, cancelReconnect := context.WithCancel(context.Background())
-	serviceCtx, cancelService := context.WithCancel(context.Background())
 
 	return &ConnectorSocket{
 		log: log.With().
@@ -79,57 +76,34 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 			Transport: &http.Transport{
 				TLSClientConfig: rc.TLSClientConfig,
 			}},
-		buf:             make([]byte, 4*1024),
-		mux:             &sync.Mutex{},
-		connectContext:  connCtx,
-		cancelReconnect: cancelReconnect,
-		serviceContext:  serviceCtx,
-		cancelService:   cancelService,
-		chDone:          make(chan int, 1),
+		buffers: &sync.Pool{
+			New: func() interface{} {
+				return make([]byte, 64*1024)
+			},
+		},
+		sigTERM: util.NewFlare(),
+		sigKILL: util.NewFlare(),
+		sigDONE: util.NewFlare(),
 	}
 }
 
 // Close the underlying websocket connection
 func (s *ConnectorSocket) Close(ctx context.Context) error {
-	s.mux.Lock()
-	defer s.mux.Unlock()
-
-	s.cancelReconnect()
-	s.cancelService()
+	s.sigTERM.Fire()
 
 	select {
-	case <-s.chDone:
-		log.Info().Msg("closing gracefully")
+	case <-s.sigDONE.Flashed():
+		log.Info().Msg("terminating gracefully")
 	case <-ctx.Done():
 		log.Info().Msg("close timeout. disconnecting forcefully...")
 	}
 
-	s.disconnect()
+	s.sigKILL.Fire()
 
 	return nil
 }
 
-func (s *ConnectorSocket) disconnect() error {
-	if !atomic.CompareAndSwapInt32(&s.status, s.status, STOPPED) {
-		return errors.New("socket already closed")
-	}
-
-	if s.wss != nil {
-		s.log.Debug().
-			Msg("socket connection closing")
-
-		defer s.log.Debug().
-			Msg("socket connection closed")
-		// I was tempted to set s.wss to nil after Close here.
-		// DON'T do it. It's better to read/write a closed connection and get an error
-		// than to panic on a nil pointer
-		return s.wss.Close(websocket.StatusNormalClosure, "close requested by client")
-	}
-
-	return nil
-}
-
-func (s *ConnectorSocket) dial() error {
+func (s *ConnectorSocket) dial(parent context.Context, chOut chan<- *websocket.Conn) {
 	headers := http.Header{}
 	headers.Add("CrankerProtocol", "1.0")
 	headers.Add("Route", s.serviceName)
@@ -138,11 +112,12 @@ func (s *ConnectorSocket) dial() error {
 	retryCount := 0
 	for {
 		select {
-		case <-s.connectContext.Done():
+		case <-s.sigTERM.Flashed():
 			s.log.Debug().
-				Msg("connect is cancelled")
+				Msg("reconnect is terminated")
 
-			return errors.New("ConnectCancelledErr")
+			close(chOut)
+			return
 
 		default:
 			retryCount++
@@ -157,46 +132,44 @@ func (s *ConnectorSocket) dial() error {
 					Int("backoff", backoff).
 					Msg("reconnecting to cranker")
 
-				ctx, cancel := context.WithTimeout(s.connectContext, time.Duration(backoff)*time.Millisecond)
-				<-ctx.Done()
-				cancel()
-				if s.connectContext.Err() != nil {
-					// cancelled
-					return ctx.Err()
+				backoffCtx, cancelBackoff := context.WithTimeout(parent, time.Duration(backoff)*time.Millisecond)
+				select {
+				case <-backoffCtx.Done():
+					cancelBackoff()
+					break
+				case <-parent.Done():
+					cancelBackoff()
+					return
 				}
 			}
 
-			ctx, cancel := context.WithTimeout(s.connectContext, 30*time.Second)
-			s.mux.Lock()
+			dialCtx, cancelDial := context.WithTimeout(parent, 30*time.Second)
 			conn, resp, err := websocket.Dial(
-				ctx,
+				dialCtx,
 				fmt.Sprintf("%s/%s", s.routerURL, "register"),
 				&websocket.DialOptions{
 					HTTPClient: s.crankerFacingHC,
 					HTTPHeader: headers,
 				})
 
-			cancel()
-
-			s.wss = conn
-			s.mux.Unlock()
+			cancelDial()
 
 			if err != nil {
 				s.log.Error().
 					Str("error", err.Error()).
 					Msg("failed to connect to cranker router")
 
-				continue
 			} else if resp != nil {
 				s.log.Debug().
 					Str("status", resp.Status).
 					Msg("wss connected")
 
-				return nil
-			} else {
-				// timeout or cancelled
-				continue
+				chOut <- conn
+				backoff = 5000
+				retryCount = 0
 			}
+
+			// continue to dial
 		}
 	}
 }
@@ -205,28 +178,32 @@ func (s *ConnectorSocket) dial() error {
 func (s *ConnectorSocket) Connect() error {
 
 	if !atomic.CompareAndSwapInt32(&s.status, s.status, STARTED) {
+		s.log.Error().Msg("socket already started.")
 		return errors.New("IllegalStatus: socket already started")
 	}
 
 	s.log.Info().Msg("socket starting")
 
-	err := s.dial()
-	if err != nil {
-		s.log.Error().AnErr("err", err).Msg("error dialing")
-		s.chDone <- 0
-		return err
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	chConn := make(chan *websocket.Conn)
+
+	go s.dial(ctx, chConn)
 
 	go func() {
-		s.handleRequest()
-		select {
-		case <-s.connectContext.Done():
-			s.log.Info().Msg("rejoin cancelled")
-			s.chDone <- 0
-		default:
-			s.log.Info().Msg("rejoining...")
-			s.Connect()
+		for conn := range chConn {
+			s.handleRequest(ctx, conn)
 		}
+
+		s.sigDONE.Fire()
+		cancel() // just for clean up
+		atomic.CompareAndSwapInt32(&s.status, s.status, STOPPED)
+	}()
+
+	go func() {
+		// watch kill signal
+		<-s.sigKILL.Flashed()
+		s.log.Debug().Msg("killing")
+		cancel() // cancelling in-flights
 	}()
 
 	s.log.Info().Msg("socket started")
@@ -234,8 +211,8 @@ func (s *ConnectorSocket) Connect() error {
 	return nil
 }
 
-func (s *ConnectorSocket) nextRequest() (*http.Request, error) {
-	messageType, message, err := s.wss.Reader(s.connectContext)
+func (s *ConnectorSocket) nextRequest(ctx context.Context, conn *websocket.Conn) (*http.Request, error) {
+	messageType, message, err := conn.Reader(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("RequestReaderError: %w", err)
 	}
@@ -249,38 +226,40 @@ func (s *ConnectorSocket) nextRequest() (*http.Request, error) {
 		return nil, errors.New("CrankerProtoError: request not started with text message")
 	}
 
-	headerSize, err := message.Read(s.buf)
+	buf := s.buffers.Get().([]byte)
+	defer s.buffers.Put(buf)
+	headerSize, err := message.Read(buf)
 	if err != nil && err != io.EOF {
 		return nil, fmt.Errorf("RequestReadError: %w", err)
 	}
 
-	s.log.Debug().Bytes("recv", s.buf[0:headerSize]).Msg("wss msg received")
+	s.log.Debug().Bytes("recv", buf[0:headerSize]).Msg("wss msg received")
 
-	firstline := s.buf[0:bytes.IndexByte(s.buf, '\n')]
-	method, url := decomposeMethodAndURL(string(firstline))
-	url = strings.TrimPrefix(url, s.servicePrefix)
+	headers := buf[0 : headerSize-2]
+	marker := buf[headerSize-2 : headerSize]
+	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(headers)))
+	if err != nil {
+		return nil, err
+	}
 
-	var req *http.Request
-	marker := s.buf[headerSize-2 : headerSize]
 	if bytes.Compare(marker, []byte(markerReqHasNoBody)) == 0 {
 		s.log.Debug().Msg("request without body")
-		req, err = http.NewRequestWithContext(s.serviceContext, method, url, nil)
 	} else {
 		s.log.Debug().Msg("request with body")
 		r, w := io.Pipe()
-		req, err = http.NewRequestWithContext(s.serviceContext, method, url, r)
-		if err == nil {
-			go s.pumpRequestBody(w)
-		}
+		req.Body = r
+		go s.pumpRequestBody(ctx, w, conn)
 	}
 
-	return req, err
+	return req.WithContext(ctx), nil
 }
 
-func (s *ConnectorSocket) pumpRequestBody(out *io.PipeWriter) {
+func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWriter, conn *websocket.Conn) {
+	buf := s.buffers.Get().([]byte)
+	defer s.buffers.Put(buf)
 	for {
 		s.log.Debug().Msg("draining request body")
-		messageType, message, err := s.wss.Reader(s.serviceContext)
+		messageType, message, err := conn.Reader(ctx)
 		if err != nil {
 			s.log.Error().
 				AnErr("err", err).
@@ -290,7 +269,7 @@ func (s *ConnectorSocket) pumpRequestBody(out *io.PipeWriter) {
 
 		switch messageType {
 		case websocket.MessageBinary:
-			n, err := io.CopyBuffer(out, message, s.buf)
+			n, err := io.CopyBuffer(out, message, buf)
 			if err != nil {
 				s.log.Error().
 					AnErr("err", err).
@@ -300,14 +279,14 @@ func (s *ConnectorSocket) pumpRequestBody(out *io.PipeWriter) {
 
 			s.log.Debug().Int64("bytesSent", n).Msg("sending request body")
 		case websocket.MessageText:
-			n, err := message.Read(s.buf)
+			n, err := message.Read(buf)
 
 			s.log.Debug().
-				Bytes("recv", s.buf[0:n]).
+				Bytes("recv", buf[0:n]).
 				Msg("expecting a marker")
 
 			if n == 2 {
-				if bytes.Compare([]byte(markerReqBodyEnded), s.buf[0:2]) == 0 {
+				if bytes.Compare([]byte(markerReqBodyEnded), buf[0:2]) == 0 {
 					out.Close()
 					s.log.Debug().
 						Msg("request ended")
@@ -315,7 +294,7 @@ func (s *ConnectorSocket) pumpRequestBody(out *io.PipeWriter) {
 				}
 			}
 
-			s.log.Error().Bytes("recv", s.buf[0:n]).Msg("protocal error: not a marker")
+			s.log.Error().Bytes("recv", buf[0:n]).Msg("protocal error: not a marker")
 
 			if err != nil || err != io.EOF {
 				s.log.Error().AnErr("err", err).Msg("error reading marker")
@@ -325,18 +304,13 @@ func (s *ConnectorSocket) pumpRequestBody(out *io.PipeWriter) {
 	}
 }
 
-func decomposeMethodAndURL(line string) (string, string) {
-	parts := strings.Split(line, " ")
-	return parts[0], parts[1]
-}
-
-func (s *ConnectorSocket) handleRequest() {
-	defer s.disconnect()
+func (s *ConnectorSocket) handleRequest(ctx context.Context, conn *websocket.Conn) {
+	defer conn.Close(websocket.StatusNormalClosure, "close requested by client")
 
 	s.log.Info().
 		Msg("waiting for request")
 
-	req, err := s.nextRequest()
+	req, err := s.nextRequest(ctx, conn)
 	if err != nil {
 		s.log.Error().AnErr("readReqErr", err).Msg("error reading request")
 		return
@@ -357,10 +331,9 @@ func (s *ConnectorSocket) handleRequest() {
 		}
 	}
 
-	err = s.sendResponse(resp)
+	err = s.sendResponse(ctx, resp, conn)
 	if err != nil {
 		s.log.Error().AnErr("respErr", err).Msg("error sending response")
-		return
 	}
 }
 
@@ -380,7 +353,7 @@ func (s *ConnectorSocket) sendRequest(req *http.Request) (*http.Response, error)
 	return s.serviceFacingHC.Do(req)
 }
 
-func (s *ConnectorSocket) sendResponse(resp *http.Response) error {
+func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response, conn *websocket.Conn) error {
 	defer resp.Body.Close()
 
 	var headerBuf bytes.Buffer
@@ -389,16 +362,20 @@ func (s *ConnectorSocket) sendResponse(resp *http.Response) error {
 	s.log.Debug().Bytes("respHeader", headerBuf.Bytes()).Msg("sending response headers")
 
 	// write headers in text
-	err := s.wss.Write(s.serviceContext, websocket.MessageText, headerBuf.Bytes())
+	err := conn.Write(ctx, websocket.MessageText, headerBuf.Bytes())
 
 	// write body in binary
-	w, err := s.wss.Writer(s.serviceContext, websocket.MessageBinary)
+	w, err := conn.Writer(ctx, websocket.MessageBinary)
 	if err != nil {
 		return fmt.Errorf("ResponseWriterError: %w", err)
 	}
 
 	defer w.Close()
-	n, err := io.CopyBuffer(w, resp.Body, s.buf)
+
+	buf := s.buffers.Get().([]byte)
+	defer s.buffers.Put(buf)
+
+	n, err := io.CopyBuffer(w, resp.Body, buf)
 
 	if err != nil {
 		return fmt.Errorf("ResponseWriteError: %w", err)

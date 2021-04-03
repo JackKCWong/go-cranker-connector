@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/JackKCWong/go-cranker-connector/pkg/config"
@@ -21,12 +22,12 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"time"
-
-	"github.com/UnnoTed/horizontal"
 )
 
 func setupLogger() {
-	log.Logger = log.Output(horizontal.ConsoleWriter{Out: os.Stderr})
+	// log.Logger = log.Output(horizontal.ConsoleWriter{Out: os.Stderr})
+	zerolog.TimeFieldFormat = time.RFC3339Nano
+	log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: "15:04:05.000"}).With().Timestamp().Logger()
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 }
 
@@ -38,10 +39,10 @@ func setupTestServer() *httptest.Server {
 		tlog.Info().
 			Msg("received request")
 
-		switch r.URL.Path {
-		case "/get":
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/get"):
 			fmt.Fprint(w, "world")
-		case "/post":
+		case strings.HasSuffix(r.URL.Path, "/post"):
 			body, err := ioutil.ReadAll(r.Body)
 			if err != nil {
 				w.WriteHeader(500)
@@ -151,24 +152,27 @@ func TestCanHandleReconnect(t *testing.T) {
 func TestCanHandlePostRequest(t *testing.T) {
 	assert := assert.New(t)
 	connector := newConnector()
-	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test2", testServer.URL)
-	assert.Nilf(err, "failed to connect to cranker")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	defer connector.Shutdown(ctx)
 
-	resp, err := testClient.Post("https://localhost:8443/test2/post",
-		"text/plain",
-		bytes.NewBufferString("world"))
+	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test2", testServer.URL)
+	assert.Nilf(err, "failed to connect to cranker")
+
+	req, _ := http.NewRequest("POST",
+		"https://localhost:8443/test2/post",
+		bytes.NewBufferString("hello world"))
+
+	resp, err := testClient.Do(req)
 
 	assert.Nilf(err, "failed to request to cranker")
-
 	assert.Equal("200 OK", resp.Status)
+
 	defer resp.Body.Close()
 
-	time.Sleep(500 * time.Millisecond)
 	body, err := ioutil.ReadAll(resp.Body)
+
 	assert.Nilf(err, "failed to read resp from cranker")
-	assert.Equal("world", string(body))
+	assert.Equal("hello world", string(body))
 }
