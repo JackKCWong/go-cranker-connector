@@ -112,6 +112,7 @@ func TestCanHandleGetRequest(t *testing.T) {
 	assert := assert.New(t)
 	connector := newConnector()
 	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test1", testServer.URL)
+	time.Sleep(200 * time.Millisecond)
 	assert.Nilf(err, "failed to connect to cranker")
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -129,7 +130,8 @@ func TestCanHandleGetRequest(t *testing.T) {
 func TestCanHandleReconnect(t *testing.T) {
 	assert := assert.New(t)
 	connector := newConnector()
-	err := connector.Connect([]string{"wss://localhost:16489"}, 2, "test1", testServer.URL)
+	err := connector.Connect([]string{"wss://localhost:16489"}, 2, "test2", testServer.URL)
+	time.Sleep(200 * time.Millisecond)
 	assert.Nilf(err, "failed to connect to cranker")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -137,7 +139,7 @@ func TestCanHandleReconnect(t *testing.T) {
 	defer connector.Shutdown(ctx)
 
 	for i := 0; i < 6; i++ {
-		req, _ := http.NewRequest("GET", "https://localhost:8443/test1/get", nil)
+		req, _ := http.NewRequest("GET", "https://localhost:8443/test2/get", nil)
 		resp, err := testClient.Do(req)
 
 		assert.Nilf(err, "failed to request to cranker: %q", err)
@@ -157,11 +159,12 @@ func TestCanHandlePostRequest(t *testing.T) {
 	defer cancel()
 	defer connector.Shutdown(ctx)
 
-	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test2", testServer.URL)
+	err := connector.Connect([]string{"wss://localhost:16489"}, 1, "test3", testServer.URL)
+	time.Sleep(200 * time.Millisecond)
 	assert.Nilf(err, "failed to connect to cranker")
 
 	req, _ := http.NewRequest("POST",
-		"https://localhost:8443/test2/post",
+		"https://localhost:8443/test3/post",
 		bytes.NewBufferString("hello world"))
 
 	resp, err := testClient.Do(req)

@@ -17,3 +17,6 @@ func (f *Flare) Fire() {
 func (f *Flare) Flashed() <-chan struct{} {
 	return f.ch
 }
+
+
+type SigChan chan struct{}

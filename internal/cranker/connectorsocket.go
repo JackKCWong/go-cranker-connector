@@ -110,66 +110,62 @@ func (s *ConnectorSocket) dial(parent context.Context, chOut chan<- *websocket.C
 
 	backoff := 5000
 	retryCount := 0
-	for {
-		select {
-		case <-s.sigTERM.Flashed():
+	select {
+	case <-s.sigTERM.Flashed():
+		s.log.Debug().
+			Msg("reconnect is terminated")
+
+		close(chOut)
+		return
+
+	default:
+		retryCount++
+		if retryCount > 1 {
+			backoff = backoff * 2
+			if backoff > 300000 {
+				// spread the reconnect over 100s to avoid reconnection storm.
+				backoff = 300000 + rand.Intn(100000)
+			}
+			s.log.Info().
+				Int("retry", retryCount).
+				Int("backoff", backoff).
+				Msg("reconnecting to cranker")
+
+			backoffCtx, cancelBackoff := context.WithTimeout(parent, time.Duration(backoff)*time.Millisecond)
+			select {
+			case <-backoffCtx.Done():
+				cancelBackoff()
+				break
+			case <-parent.Done():
+				cancelBackoff()
+				return
+			}
+		}
+
+		dialCtx, cancelDial := context.WithTimeout(parent, 30*time.Second)
+		conn, resp, err := websocket.Dial(
+			dialCtx,
+			fmt.Sprintf("%s/%s", s.routerURL, "register"),
+			&websocket.DialOptions{
+				HTTPClient: s.crankerFacingHC,
+				HTTPHeader: headers,
+			})
+
+		cancelDial()
+
+		if err != nil {
+			s.log.Error().
+				Str("error", err.Error()).
+				Msg("failed to connect to cranker router")
+
+		} else if resp != nil {
 			s.log.Debug().
-				Msg("reconnect is terminated")
+				Str("status", resp.Status).
+				Msg("wss connected")
 
-			close(chOut)
-			return
-
-		default:
-			retryCount++
-			if retryCount > 1 {
-				backoff = backoff * 2
-				if backoff > 300000 {
-					// spread the reconnect over 100s to avoid reconnection storm.
-					backoff = 300000 + rand.Intn(100000)
-				}
-				s.log.Info().
-					Int("retry", retryCount).
-					Int("backoff", backoff).
-					Msg("reconnecting to cranker")
-
-				backoffCtx, cancelBackoff := context.WithTimeout(parent, time.Duration(backoff)*time.Millisecond)
-				select {
-				case <-backoffCtx.Done():
-					cancelBackoff()
-					break
-				case <-parent.Done():
-					cancelBackoff()
-					return
-				}
-			}
-
-			dialCtx, cancelDial := context.WithTimeout(parent, 30*time.Second)
-			conn, resp, err := websocket.Dial(
-				dialCtx,
-				fmt.Sprintf("%s/%s", s.routerURL, "register"),
-				&websocket.DialOptions{
-					HTTPClient: s.crankerFacingHC,
-					HTTPHeader: headers,
-				})
-
-			cancelDial()
-
-			if err != nil {
-				s.log.Error().
-					Str("error", err.Error()).
-					Msg("failed to connect to cranker router")
-
-			} else if resp != nil {
-				s.log.Debug().
-					Str("status", resp.Status).
-					Msg("wss connected")
-
-				chOut <- conn
-				backoff = 5000
-				retryCount = 0
-			}
-
-			// continue to dial
+			chOut <- conn
+			backoff = 5000
+			retryCount = 0
 		}
 	}
 }
@@ -186,15 +182,24 @@ func (s *ConnectorSocket) Connect() error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	chConn := make(chan *websocket.Conn)
+	sigReconn := make(SigChan)
+	go func() {
+		sigReconn <- struct{}{} // make 1st connection
+	}()
 
-	go s.dial(ctx, chConn)
+	go func() {
+		for range sigReconn {
+			s.dial(ctx, chConn)
+		}
+	}()
 
 	go func() {
 		for conn := range chConn {
-			s.handleRequest(ctx, conn)
+			s.handleRequest(ctx, sigReconn, conn)
 		}
 
 		s.sigDONE.Fire()
+		close(sigReconn)
 		cancel() // just for clean up
 		atomic.CompareAndSwapInt32(&s.status, s.status, STOPPED)
 	}()
@@ -203,6 +208,7 @@ func (s *ConnectorSocket) Connect() error {
 		// watch kill signal
 		<-s.sigKILL.Flashed()
 		s.log.Debug().Msg("killing")
+		close(sigReconn)
 		cancel() // cancelling in-flights
 	}()
 
@@ -211,11 +217,14 @@ func (s *ConnectorSocket) Connect() error {
 	return nil
 }
 
-func (s *ConnectorSocket) nextRequest(ctx context.Context, conn *websocket.Conn) (*http.Request, error) {
+func (s *ConnectorSocket) nextRequest(ctx context.Context, sigReconn SigChan, conn *websocket.Conn) (*http.Request, error) {
 	messageType, message, err := conn.Reader(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("RequestReaderError: %w", err)
 	}
+
+	log.Debug().Msg("request available...")
+	sigReconn <- struct{}{} // kick start reconnect
 
 	if messageType != websocket.MessageText {
 		s.log.Error().
@@ -304,13 +313,13 @@ func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWrite
 	}
 }
 
-func (s *ConnectorSocket) handleRequest(ctx context.Context, conn *websocket.Conn) {
+func (s *ConnectorSocket) handleRequest(ctx context.Context, sigReconn SigChan, conn *websocket.Conn) {
 	defer conn.Close(websocket.StatusNormalClosure, "close requested by client")
 
 	s.log.Info().
 		Msg("waiting for request")
 
-	req, err := s.nextRequest(ctx, conn)
+	req, err := s.nextRequest(ctx, sigReconn, conn)
 	if err != nil {
 		s.log.Error().AnErr("readReqErr", err).Msg("error reading request")
 		return
