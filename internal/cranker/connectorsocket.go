@@ -56,17 +56,17 @@ type ConnectorSocket struct {
 func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 	rc *config.RouterConfig, serviceFacingHC *http.Client) *ConnectorSocket {
 
-	uuid := uuid.New().String()
+	uid := uuid.New().String()
 
 	return &ConnectorSocket{
 		log: log.With().
-			Str("socketId", uuid).
+			Str("socketId", uid).
 			Str("routerURL", routerURL).
 			Str("serviceURL", serviceURL).
 			Str("serviceName", serviceName).
 			Logger(),
 
-		UUID:            uuid,
+		UUID:            uid,
 		routerURL:       routerURL,
 		serviceName:     serviceName,
 		servicePrefix:   "/" + serviceName,
@@ -84,6 +84,7 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 		sigTERM: util.NewFlare(),
 		sigKILL: util.NewFlare(),
 		sigDONE: util.NewFlare(),
+		status:  NEW,
 	}
 }
 
@@ -253,11 +254,14 @@ func (s *ConnectorSocket) nextRequest(ctx context.Context, sigReconn SigChan, co
 
 	if bytes.Compare(marker, []byte(markerReqHasNoBody)) == 0 {
 		s.log.Debug().Msg("request without body")
-	} else {
+	} else if bytes.Compare(marker, []byte(markerReqBodyPending)) == 0 {
 		s.log.Debug().Msg("request with body")
 		r, w := io.Pipe()
 		req.Body = r
 		go s.pumpRequestBody(ctx, w, conn)
+	} else {
+		s.log.Error().Bytes("marker", marker).Msg("unexpected marker")
+		return nil, errors.New("UnexpectedMarker")
 	}
 
 	return req.WithContext(ctx), nil
@@ -296,7 +300,14 @@ func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWrite
 
 			if n == 2 {
 				if bytes.Compare([]byte(markerReqBodyEnded), buf[0:2]) == 0 {
-					out.Close()
+					err := out.Close()
+					if err != nil {
+						s.log.Error().
+							Bytes("marker", buf[0:2]).
+							Msg("unexpected marker")
+						return
+					}
+
 					s.log.Debug().
 						Msg("request ended")
 					return
@@ -314,7 +325,12 @@ func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWrite
 }
 
 func (s *ConnectorSocket) handleRequest(ctx context.Context, sigReconn SigChan, conn *websocket.Conn) {
-	defer conn.Close(websocket.StatusNormalClosure, "close requested by client")
+	defer func(conn *websocket.Conn, code websocket.StatusCode, reason string) {
+		err := conn.Close(code, reason)
+		if err != nil {
+			s.log.Info().Msg("error closing wss connection")
+		}
+	}(conn, websocket.StatusNormalClosure, "close requested by client")
 
 	s.log.Info().
 		Msg("waiting for request")
@@ -366,12 +382,22 @@ func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response,
 	defer resp.Body.Close()
 
 	var headerBuf bytes.Buffer
-	fmt.Fprintf(&headerBuf, "%s %s\r\n", resp.Proto, resp.Status)
-	resp.Header.Write(&headerBuf)
+	_, err := fmt.Fprintf(&headerBuf, "%s %s\r\n", resp.Proto, resp.Status)
+	if err != nil {
+		return err
+	}
+
+	err = resp.Header.Write(&headerBuf)
+	if err != nil {
+		return err
+	}
 	s.log.Debug().Bytes("respHeader", headerBuf.Bytes()).Msg("sending response headers")
 
 	// write headers in text
-	err := conn.Write(ctx, websocket.MessageText, headerBuf.Bytes())
+	err = conn.Write(ctx, websocket.MessageText, headerBuf.Bytes())
+	if err != nil {
+		return err
+	}
 
 	// write body in binary
 	w, err := conn.Writer(ctx, websocket.MessageBinary)
