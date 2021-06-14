@@ -115,62 +115,65 @@ func (s *ConnectorSocket) dial(parent context.Context, chOut chan<- *websocket.C
 
 	backoff := 5000
 	retryCount := 0
-	select {
-	case <-s.sigTERM.Flashed():
-		s.log.Debug().
-			Msg("reconnect is terminated")
+	for {
+		select {
+		case <-s.sigTERM.Flashed():
+			s.log.Debug().
+				Msg("reconnect is terminated")
 
-		close(chOut)
-		return
+			close(chOut)
+			return
 
-	default:
-		retryCount++
-		if retryCount > 1 {
-			backoff = backoff * 2
-			if backoff > 300000 {
-				// spread the reconnect over 100s to avoid reconnection storm.
-				backoff = 300000 + rand.Intn(100000)
+		default:
+			retryCount++
+			if retryCount > 1 {
+				backoff = backoff * 2
+				if backoff > 300000 {
+					// spread the reconnect over 100s to avoid reconnection storm.
+					backoff = 300000 + rand.Intn(100000)
+				}
+				s.log.Info().
+					Int("retry", retryCount).
+					Int("backoff", backoff).
+					Msg("reconnecting to cranker")
+
+				backoffCtx, cancelBackoff := context.WithTimeout(parent, time.Duration(backoff)*time.Millisecond)
+				select {
+				case <-backoffCtx.Done():
+					cancelBackoff()
+					break
+				case <-parent.Done():
+					cancelBackoff()
+					return
+				}
 			}
-			s.log.Info().
-				Int("retry", retryCount).
-				Int("backoff", backoff).
-				Msg("reconnecting to cranker")
 
-			backoffCtx, cancelBackoff := context.WithTimeout(parent, time.Duration(backoff)*time.Millisecond)
-			select {
-			case <-backoffCtx.Done():
-				cancelBackoff()
-				break
-			case <-parent.Done():
-				cancelBackoff()
+			dialCtx, cancelDial := context.WithTimeout(parent, 30*time.Second)
+			conn, resp, err := websocket.Dial(
+				dialCtx,
+				fmt.Sprintf("%s/%s", s.routerURL, "register"),
+				&websocket.DialOptions{
+					HTTPClient: s.crankerFacingHC,
+					HTTPHeader: headers,
+				})
+
+			cancelDial()
+
+			if err != nil {
+				s.log.Error().
+					Str("error", err.Error()).
+					Msg("failed to connect to cranker router")
+
+			} else if resp != nil {
+				s.log.Info().
+					Str("status", resp.Status).
+					Msg("wss connected")
+
+				chOut <- conn
+				backoff = 5000
+				retryCount = 0
 				return
 			}
-		}
-
-		dialCtx, cancelDial := context.WithTimeout(parent, 30*time.Second)
-		conn, resp, err := websocket.Dial(
-			dialCtx,
-			fmt.Sprintf("%s/%s", s.routerURL, "register"),
-			&websocket.DialOptions{
-				HTTPClient: s.crankerFacingHC,
-				HTTPHeader: headers,
-			})
-
-		cancelDial()
-
-		if err != nil {
-			s.log.Error().
-				Str("error", err.Error()).
-				Msg("failed to connect to cranker router")
-
-		} else if resp != nil {
-			s.log.Debug().
-				Str("status", resp.Status).
-				Msg("wss connected")
-
-			chOut <- conn
-			backoff = 5000
-			retryCount = 0
 		}
 	}
 }
@@ -224,12 +227,13 @@ func (s *ConnectorSocket) Connect() error {
 
 func (s *ConnectorSocket) nextRequest(ctx context.Context, sigReconn SigChan, conn *websocket.Conn) (*http.Request, error) {
 	messageType, message, err := conn.Reader(ctx)
+	sigReconn <- struct{}{} // kick start reconnect
+
 	if err != nil {
 		return nil, fmt.Errorf("RequestReaderError: %w", err)
 	}
 
 	log.Debug().Msg("request available...")
-	sigReconn <- struct{}{} // kick start reconnect
 
 	if messageType != websocket.MessageText {
 		s.log.Error().
