@@ -1,7 +1,7 @@
 # go-cranker-connector
 
-a golang port
-of [Crank4j](https://github.com/danielflower/crank4j)'s [connector](https://github.com/danielflower/crank4j/tree/master/crank4j-connector-embedded)
+a golang port of [Crank4j](https://github.com/danielflower/crank4j)'s [connector](https://github.com/danielflower/crank4j/tree/master/crank4j-connector-embedded)
+
 
 ## install
 
@@ -9,9 +9,11 @@ of [Crank4j](https://github.com/danielflower/crank4j)'s [connector](https://gith
 go get github.com/JackKCWong/go-cranker-connector
 ```
 
+
 ## usage
 
 see `main.go` for usage as a standalone / embedded connector
+
 see [go-cranker-app](https://github.com/JackKCWong/go-cranker-app) embedded usage with [unixsocket](https://en.wikipedia.org/wiki/Unix_domain_socket).
 
 
