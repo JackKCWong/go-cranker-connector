@@ -9,6 +9,7 @@ import (
 type RouterConfig struct {
 	TLSClientConfig   *tls.Config
 	WSHandshakTimeout time.Duration
+	BufferSize        int // min size 8k
 }
 
 type ServiceConfig struct {

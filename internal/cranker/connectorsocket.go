@@ -57,6 +57,10 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 	rc *config.RouterConfig, serviceFacingHC *http.Client) *ConnectorSocket {
 
 	uid := uuid.New().String()
+	bufsize := 8 * 1024
+	if rc.BufferSize > bufsize {
+		bufsize = rc.BufferSize
+	}
 
 	return &ConnectorSocket{
 		log: log.With().
@@ -78,7 +82,7 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 			}},
 		buffers: &sync.Pool{
 			New: func() interface{} {
-				return make([]byte, 64*1024)
+				return make([]byte, bufsize)
 			},
 		},
 		sigTERM: util.NewFlare(),
@@ -399,24 +403,35 @@ func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response,
 		return err
 	}
 
-	// write body in binary
-	w, err := conn.Writer(ctx, websocket.MessageBinary)
-	if err != nil {
-		return fmt.Errorf("ResponseWriterError: %w", err)
-	}
-
-	defer w.Close()
-
 	buf := s.buffers.Get().([]byte)
 	defer s.buffers.Put(buf)
 
-	n, err := io.CopyBuffer(w, resp.Body, buf)
+	for {
+		nread, err := resp.Body.Read(buf)
+		if nread > 0 {
+			s.log.Debug().Int("bytesRead", nread).Msg("response read")
 
-	if err != nil {
-		return fmt.Errorf("ResponseWriteError: %w", err)
+			wssWriter, _ := conn.Writer(ctx, websocket.MessageBinary)
+			nsent, err := io.Copy(wssWriter, bytes.NewReader(buf[0:nread]))
+			if err != nil {
+				s.log.Error().AnErr("err", err).Msg("Error sending response")
+			}
+
+			wssWriter.Close()
+
+			s.log.Debug().Int64("bytesSent", nsent).Msg("response sent")
+		}
+
+		if err != nil && err != io.EOF {
+			s.log.Error().AnErr("err", err).Msg("Error reading response from service")
+			return err
+		}
+
+		if err == io.EOF {
+			s.log.Debug().Msg("")
+			break
+		}
 	}
-
-	s.log.Debug().Int64("bytesSent", n).Msg("response sent")
 
 	return nil
 }
