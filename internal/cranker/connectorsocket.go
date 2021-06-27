@@ -51,6 +51,7 @@ type ConnectorSocket struct {
 	sigKILL         *util.Flare
 	sigDONE         *util.Flare
 	status          int32
+	redialLock      sync.Mutex
 }
 
 // NewConnectorSocket returns one new connection to a router URL.
@@ -86,10 +87,11 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 				return make([]byte, bufsize)
 			},
 		},
-		sigTERM: util.NewFlare(),
-		sigKILL: util.NewFlare(),
-		sigDONE: util.NewFlare(),
-		status:  NEW,
+		sigTERM:    util.NewFlare(),
+		sigKILL:    util.NewFlare(),
+		sigDONE:    util.NewFlare(),
+		status:     NEW,
+		redialLock: sync.Mutex{},
 	}
 }
 
@@ -109,7 +111,9 @@ func (s *ConnectorSocket) Close(ctx context.Context) error {
 	return nil
 }
 
-func (s *ConnectorSocket) dial(parent context.Context, chOut chan<- *websocket.Conn) {
+func (s *ConnectorSocket) dial(parent context.Context) *websocket.Conn {
+	s.redialLock.Lock()
+	s.log.Info().Msg("dialing")
 	headers := http.Header{}
 	headers.Add("CrankerProtocol", "1.0")
 	headers.Add("Route", s.serviceName)
@@ -122,8 +126,7 @@ func (s *ConnectorSocket) dial(parent context.Context, chOut chan<- *websocket.C
 			s.log.Debug().
 				Msg("reconnect is terminated")
 
-			close(chOut)
-			return
+			return nil
 
 		default:
 			retryCount++
@@ -145,7 +148,7 @@ func (s *ConnectorSocket) dial(parent context.Context, chOut chan<- *websocket.C
 					break
 				case <-parent.Done():
 					cancelBackoff()
-					return
+					return nil
 				}
 			}
 
@@ -170,10 +173,9 @@ func (s *ConnectorSocket) dial(parent context.Context, chOut chan<- *websocket.C
 					Str("status", resp.Status).
 					Msg("wss connected")
 
-				chOut <- conn
 				backoff = 5000
 				retryCount = 0
-				return
+				return conn
 			}
 		}
 	}
@@ -191,24 +193,24 @@ func (s *ConnectorSocket) Connect() error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	chConn := make(chan *websocket.Conn)
-	sigReconn := make(SigChan)
-	go func() {
-		sigReconn <- struct{}{} // make 1st connection
-	}()
 
 	go func() {
-		for range sigReconn {
-			s.dial(ctx, chConn)
+		for {
+			select {
+			case <-ctx.Done():
+				s.log.Info().Msg("stop redial")
+			default:
+				chConn <- s.dial(ctx)
+			}
 		}
 	}()
 
 	go func() {
 		for conn := range chConn {
-			s.proxyRequest(ctx, sigReconn, conn)
+			s.proxyRequest(ctx, conn)
 		}
 
 		s.sigDONE.Fire()
-		close(sigReconn)
 		cancel() // just for clean up
 		atomic.CompareAndSwapInt32(&s.status, s.status, STOPPED)
 	}()
@@ -217,7 +219,6 @@ func (s *ConnectorSocket) Connect() error {
 		// watch kill signal
 		<-s.sigKILL.Flashed()
 		s.log.Debug().Msg("killing")
-		close(sigReconn)
 		cancel() // cancelling in-flights
 	}()
 
@@ -226,21 +227,21 @@ func (s *ConnectorSocket) Connect() error {
 	return nil
 }
 
-func (s *ConnectorSocket) nextRequest(ctx context.Context, sigReconn SigChan, conn *websocket.Conn) (*http.Request, error) {
+func (s *ConnectorSocket) nextRequest(ctx context.Context, conn *websocket.Conn) (*http.Request, error) {
 	messageType, message, err := conn.Reader(ctx)
-	sigReconn <- struct{}{} // kick start reconnect
+	s.redialLock.Unlock() // kick off redial
 
 	if err != nil {
 		return nil, fmt.Errorf("RequestReaderError: %w", err)
 	}
 
-	s.log.Debug().Msg("request available...")
+	s.log.Debug().Msg("request available")
 
 	if messageType != websocket.MessageText {
 		s.log.Error().
 			Str("expectedMessageType", "textMessage").
 			Str("actualMessageType", "binaryMessage").
-			Msg("protocal error")
+			Msg("protocol error")
 
 		return nil, errors.New("CrankerProtoError: request not started with text message")
 	}
@@ -325,7 +326,7 @@ func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWrite
 				}
 			}
 
-			s.log.Error().Bytes("recv", buf[0:n]).Msg("protocal error: not a marker")
+			s.log.Error().Bytes("recv", buf[0:n]).Msg("protocol error: not a marker")
 
 			if err != nil || err != io.EOF {
 				s.log.Error().AnErr("err", err).Msg("error reading marker")
@@ -335,7 +336,7 @@ func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWrite
 	}
 }
 
-func (s *ConnectorSocket) proxyRequest(ctx context.Context, sigReconn SigChan, conn *websocket.Conn) {
+func (s *ConnectorSocket) proxyRequest(ctx context.Context, conn *websocket.Conn) {
 	defer func(conn *websocket.Conn, code websocket.StatusCode, reason string) {
 		err := conn.Close(code, reason)
 		if err != nil {
@@ -346,7 +347,7 @@ func (s *ConnectorSocket) proxyRequest(ctx context.Context, sigReconn SigChan, c
 	s.log.Info().
 		Msg("waiting for request")
 
-	req, err := s.nextRequest(ctx, sigReconn, conn)
+	req, err := s.nextRequest(ctx, conn)
 	if err != nil {
 		s.log.Error().AnErr("readReqErr", err).Msg("error reading request")
 		return

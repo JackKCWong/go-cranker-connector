@@ -13,9 +13,6 @@ import (
 
 func TestCanHandleGetRequest(t *testing.T) {
 	assert := assert.New(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-	defer connector.Shutdown(ctx)
 
 	req, _ := http.NewRequest("GET", testEndpoint("/get"), nil)
 	resp, err := testClient.Do(req)
@@ -28,10 +25,6 @@ func TestCanHandleGetRequest(t *testing.T) {
 
 func TestCanHandleReconnect(t *testing.T) {
 	assert := assert.New(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-	defer connector.Shutdown(ctx)
 
 	for i := 0; i < 6; i++ {
 		req, _ := http.NewRequest("GET", testEndpoint("/get"), nil)
