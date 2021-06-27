@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -203,7 +204,7 @@ func (s *ConnectorSocket) Connect() error {
 
 	go func() {
 		for conn := range chConn {
-			s.handleRequest(ctx, sigReconn, conn)
+			s.proxyRequest(ctx, sigReconn, conn)
 		}
 
 		s.sigDONE.Fire()
@@ -233,7 +234,7 @@ func (s *ConnectorSocket) nextRequest(ctx context.Context, sigReconn SigChan, co
 		return nil, fmt.Errorf("RequestReaderError: %w", err)
 	}
 
-	log.Debug().Msg("request available...")
+	s.log.Debug().Msg("request available...")
 
 	if messageType != websocket.MessageText {
 		s.log.Error().
@@ -259,6 +260,8 @@ func (s *ConnectorSocket) nextRequest(ctx context.Context, sigReconn SigChan, co
 	if err != nil {
 		return nil, err
 	}
+
+	req.URL.Path = strings.TrimPrefix(req.URL.Path, s.servicePrefix)
 
 	if bytes.Compare(marker, []byte(markerReqHasNoBody)) == 0 {
 		s.log.Debug().Msg("request without body")
@@ -332,7 +335,7 @@ func (s *ConnectorSocket) pumpRequestBody(ctx context.Context, out *io.PipeWrite
 	}
 }
 
-func (s *ConnectorSocket) handleRequest(ctx context.Context, sigReconn SigChan, conn *websocket.Conn) {
+func (s *ConnectorSocket) proxyRequest(ctx context.Context, sigReconn SigChan, conn *websocket.Conn) {
 	defer func(conn *websocket.Conn, code websocket.StatusCode, reason string) {
 		err := conn.Close(code, reason)
 		if err != nil {
