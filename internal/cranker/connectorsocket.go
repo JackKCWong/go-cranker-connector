@@ -111,7 +111,7 @@ func (s *ConnectorSocket) Close(ctx context.Context) error {
 	return nil
 }
 
-func (s *ConnectorSocket) dial(parent context.Context) *websocket.Conn {
+func (s *ConnectorSocket) dial(parent context.Context) (*websocket.Conn, error) {
 	s.redialLock.Lock()
 	s.log.Info().Msg("dialing")
 	headers := http.Header{}
@@ -137,8 +137,13 @@ func (s *ConnectorSocket) dial(parent context.Context) *websocket.Conn {
 				Str("error", err.Error()).
 				Msg("failed to connect to cranker router")
 
-			return nil, err
-
+			if errors.Is(err, context.Canceled) {
+				// stop retry
+				return nil, retry.EndOfRetry
+			} else {
+				// retry
+				return nil, err
+			}
 		} else {
 			s.log.Info().
 				Str("status", resp.Status).
@@ -155,10 +160,10 @@ func (s *ConnectorSocket) dial(parent context.Context) *websocket.Conn {
 	}))
 
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
-	return conn.(*websocket.Conn)
+	return conn.(*websocket.Conn), nil
 }
 
 // Connect connection to cranker router and consume incoming requests.
@@ -171,27 +176,34 @@ func (s *ConnectorSocket) Connect() error {
 
 	s.log.Info().Msg("socket starting")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	rootCtx, cancelAll := context.WithCancel(context.Background())
 	chConn := make(chan *websocket.Conn)
 
 	go func() {
 		for {
 			select {
-			case <-ctx.Done():
-				s.log.Info().Msg("stop redial")
+			case <-s.sigTERM.Flashed():
+				s.log.Info().Msg("redial cancelled")
+				close(chConn)
 			default:
-				chConn <- s.dial(ctx)
+				conn, err := s.dial(rootCtx)
+				if err != nil {
+					s.log.Err(err).Msg("redial stopped")
+					return
+				}
+
+				chConn <- conn
 			}
 		}
 	}()
 
 	go func() {
 		for conn := range chConn {
-			s.proxyRequest(ctx, conn)
+			go s.proxyRequest(rootCtx, conn)
 		}
 
 		s.sigDONE.Fire()
-		cancel() // just for clean up
+		cancelAll() // just for clean up
 		atomic.CompareAndSwapInt32(&s.status, s.status, STOPPED)
 	}()
 
@@ -199,7 +211,7 @@ func (s *ConnectorSocket) Connect() error {
 		// watch kill signal
 		<-s.sigKILL.Flashed()
 		s.log.Debug().Msg("killing")
-		cancel() // cancelling in-flights
+		cancelAll() // cancelling in-flights
 	}()
 
 	s.log.Info().Msg("socket started")
