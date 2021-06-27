@@ -55,14 +55,8 @@ type ConnectorSocket struct {
 }
 
 // NewConnectorSocket returns one new connection to a router URL.
-func NewConnectorSocket(routerURL, serviceName, serviceURL string,
-	rc *config.RouterConfig, serviceFacingHC *http.Client) *ConnectorSocket {
-
+func NewConnectorSocket(buffers *sync.Pool, routerURL, serviceName, serviceURL string, rc *config.RouterConfig, serviceFacingHC *http.Client) *ConnectorSocket {
 	uid := uuid.New().String()
-	bufsize := 8 * 1024
-	if rc.BufferSize > bufsize {
-		bufsize = rc.BufferSize
-	}
 
 	return &ConnectorSocket{
 		log: log.With().
@@ -82,11 +76,7 @@ func NewConnectorSocket(routerURL, serviceName, serviceURL string,
 			Transport: &http.Transport{
 				TLSClientConfig: rc.TLSClientConfig,
 			}},
-		buffers: &sync.Pool{
-			New: func() interface{} {
-				return make([]byte, bufsize)
-			},
-		},
+		buffers:    buffers,
 		sigTERM:    util.NewFlare(),
 		sigKILL:    util.NewFlare(),
 		sigDONE:    util.NewFlare(),

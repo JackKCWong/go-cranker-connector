@@ -19,14 +19,27 @@ type Connector struct {
 	routerConfig     *config.RouterConfig
 	connectorSockets []*cranker.ConnectorSocket
 	mux              *sync.Mutex
+	buffers          *sync.Pool
 }
 
 // NewConnector returns a new Connector
 func NewConnector(rc *config.RouterConfig, sc *config.ServiceConfig) *Connector {
+	bufsize := 8 * 1024
+	if rc.BufferSize > bufsize {
+		bufsize = rc.BufferSize
+	}
+
+	buffers := &sync.Pool{
+		New: func() interface{} {
+			return make([]byte, bufsize)
+		},
+	}
+
 	return &Connector{
-		routerConfig: rc,
+		routerConfig:    rc,
 		serviceFacingHC: sc.HTTPClient,
 		mux:             &sync.Mutex{},
+		buffers:         buffers,
 	}
 }
 
@@ -60,6 +73,7 @@ func (c *Connector) Connect(
 	for i := 0; i < noOfRouterURLs; i++ {
 		for j := 0; j < slidingWindow; j++ {
 			cs := cranker.NewConnectorSocket(
+				c.buffers,
 				c.routerURLs[i].String(),
 				serviceName,
 				serviceURL,
@@ -70,7 +84,10 @@ func (c *Connector) Connect(
 			c.connectorSockets = append(c.connectorSockets, cs)
 			go func() {
 				defer wgSockets.Done()
-				cs.Connect()
+				err := cs.Connect()
+				if err != nil {
+					log.Err(err).Msg("failed to connect socket")
+				}
 			}()
 		}
 	}
@@ -98,15 +115,15 @@ func (c *Connector) Shutdown(ctx context.Context) {
 		wg.Add(1)
 		go func(s *cranker.ConnectorSocket) {
 			defer wg.Done()
-			close(ctx, s)
+			log.Info().Str("socketId", s.UUID).Msg("socket closing")
+			err := s.Close(ctx)
+			if err != nil {
+				log.Err(err).Msg("error closing socket")
+				return
+			}
+			log.Info().Str("socketId", s.UUID).Msg("socket closed")
 		}(s)
 	}
 
 	wg.Wait()
-}
-
-func close(ctx context.Context, s *cranker.ConnectorSocket) {
-	log.Info().Str("socketId", s.UUID).Msg("socket closing")
-	s.Close(ctx)
-	log.Info().Str("socketId", s.UUID).Msg("socket closed")
 }
