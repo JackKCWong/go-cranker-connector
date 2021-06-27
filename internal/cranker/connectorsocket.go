@@ -6,9 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/JackKCWong/go-cranker-connector/internal/util/retry"
 	"io"
 	"io/ioutil"
-	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
@@ -118,67 +118,47 @@ func (s *ConnectorSocket) dial(parent context.Context) *websocket.Conn {
 	headers.Add("CrankerProtocol", "1.0")
 	headers.Add("Route", s.serviceName)
 
-	backoff := 5000
-	retryCount := 0
-	for {
-		select {
-		case <-s.sigTERM.Flashed():
-			s.log.Debug().
-				Msg("reconnect is terminated")
+	backoff := retry.Randomize(&retry.ExpBackoff{MinInterval: 5 * time.Second, MaxInterval: 30 * time.Second}, 5*time.Second)
 
-			return nil
+	conn, err := retry.Retry(func() (interface{}, error) {
+		dialCtx, cancelDial := context.WithTimeout(parent, 30*time.Second)
+		defer cancelDial()
 
-		default:
-			retryCount++
-			if retryCount > 1 {
-				backoff = backoff * 2
-				if backoff > 300000 {
-					// spread the reconnect over 100s to avoid reconnection storm.
-					backoff = 300000 + rand.Intn(100000)
-				}
-				s.log.Info().
-					Int("retry", retryCount).
-					Int("backoff", backoff).
-					Msg("reconnecting to cranker")
+		conn, resp, err := websocket.Dial(
+			dialCtx,
+			fmt.Sprintf("%s/%s", s.routerURL, "register"),
+			&websocket.DialOptions{
+				HTTPClient: s.crankerFacingHC,
+				HTTPHeader: headers,
+			})
 
-				backoffCtx, cancelBackoff := context.WithTimeout(parent, time.Duration(backoff)*time.Millisecond)
-				select {
-				case <-backoffCtx.Done():
-					cancelBackoff()
-					break
-				case <-parent.Done():
-					cancelBackoff()
-					return nil
-				}
-			}
+		if err != nil {
+			s.log.Error().
+				Str("error", err.Error()).
+				Msg("failed to connect to cranker router")
 
-			dialCtx, cancelDial := context.WithTimeout(parent, 30*time.Second)
-			conn, resp, err := websocket.Dial(
-				dialCtx,
-				fmt.Sprintf("%s/%s", s.routerURL, "register"),
-				&websocket.DialOptions{
-					HTTPClient: s.crankerFacingHC,
-					HTTPHeader: headers,
-				})
+			return nil, err
 
-			cancelDial()
+		} else {
+			s.log.Info().
+				Str("status", resp.Status).
+				Msg("wss connected")
 
-			if err != nil {
-				s.log.Error().
-					Str("error", err.Error()).
-					Msg("failed to connect to cranker router")
-
-			} else if resp != nil {
-				s.log.Info().
-					Str("status", resp.Status).
-					Msg("wss connected")
-
-				backoff = 5000
-				retryCount = 0
-				return conn
-			}
+			return conn, nil
 		}
+	}, retry.AsBackoff(func(err error) (time.Duration, error) {
+		duration, err := backoff.Backoff(err)
+		if err == nil {
+			s.log.Info().Int64("afterMs", duration.Milliseconds()).Msg("backoff")
+		}
+		return duration, err
+	}))
+
+	if err != nil {
+		return nil
 	}
+
+	return conn.(*websocket.Conn)
 }
 
 // Connect connection to cranker router and consume incoming requests.
