@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/JackKCWong/go-cranker-connector/internal/util/bio"
 	"github.com/JackKCWong/go-cranker-connector/internal/util/retry"
 	"io"
 	"io/ioutil"
@@ -230,12 +231,13 @@ func (s *ConnectorSocket) nextRequest(ctx context.Context, conn *websocket.Conn)
 
 	buf := s.buffers.Get().([]byte)
 	defer s.buffers.Put(buf)
-	headerSize, err := message.Read(buf)
+
+	headerSize, err := bio.CopyDirect(buf, message)
 	if err != nil && err != io.EOF {
 		return nil, fmt.Errorf("RequestReadError: %w", err)
 	}
 
-	s.log.Debug().Bytes("recv", buf[0:headerSize]).Msg("wss msg received")
+	s.log.Debug().Int("bytesRecv", headerSize).Msg("headers received")
 
 	headers := buf[0 : headerSize-2]
 	marker := buf[headerSize-2 : headerSize]
@@ -418,7 +420,6 @@ func (s *ConnectorSocket) sendResponse(ctx context.Context, resp *http.Response,
 		}
 
 		if err == io.EOF {
-			s.log.Debug().Msg("")
 			break
 		}
 	}
