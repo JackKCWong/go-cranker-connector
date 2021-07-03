@@ -1,5 +1,5 @@
 ### Check response status, headers, and content-type
-POST https://httpbin.org/post
+POST http://localhost:8080/post
 Content-Type: text/plain
 
 hello world

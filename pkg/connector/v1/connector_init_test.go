@@ -2,12 +2,15 @@ package connector
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"github.com/JackKCWong/go-cranker-connector/internal/util"
 	"github.com/JackKCWong/go-cranker-connector/pkg/config"
 	"github.com/mccutchen/go-httpbin/v2/httpbin"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"io"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -92,25 +95,45 @@ func newConnector() *Connector {
 }
 
 type HttpBinResp struct {
-	Args    Args        `json:"args"`
-	Data    string      `json:"data"`
-	Files   Files       `json:"files"`
-	Form    Form        `json:"form"`
-	Headers Headers     `json:"headers"`
-	JSON    interface{} `json:"json"`
-	Origin  string      `json:"origin"`
-	URL     string      `json:"url"`
+	Args    Args                       `json:"args"`
+	Data    string                     `json:"data"`
+	Files   Files                      `json:"files"`
+	Form    Form                       `json:"form"`
+	Headers Headers                    `json:"headers"`
+	JSON    interface{}                `json:"json"`
+	Origin  string                     `json:"origin"`
+	URL     string                     `json:"url"`
+	Cookies map[string]json.RawMessage `json:"cookies"`
 }
+
 type Args struct {
 }
+
 type Files struct {
 }
+
 type Form struct {
 }
+
 type Headers struct {
 	AcceptEncoding []string `json:"Accept-Encoding"`
 	ContentLength  []string `json:"Content-Length"`
 	ContentType    []string `json:"Content-Type"`
 	Host           []string `json:"Host"`
 	UserAgent      []string `json:"User-Agent"`
+}
+
+func bin(body io.ReadCloser) (*HttpBinResp, error) {
+	binResp := HttpBinResp{}
+	buf, err := ioutil.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+
+	err = json.Unmarshal(buf, &binResp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &binResp, nil
 }

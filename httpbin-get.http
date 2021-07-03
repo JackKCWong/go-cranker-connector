@@ -1,5 +1,5 @@
 ### Check response status, headers, and content-type
-GET https://httpbin.org/get
+GET http://localhost:8080/get
 
 > {%
     client.test("Request executed successfully", function() {
@@ -15,3 +15,11 @@ GET https://httpbin.org/get
         client.assert(type === "application/json", "Expected 'application/json' but received '" + type + "'");
     });
 %}
+
+###
+GET http://localhost:8080/json
+
+
+###
+GET http://localhost:8080/cookies
+Cookie: hello=world

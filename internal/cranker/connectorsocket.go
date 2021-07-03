@@ -232,7 +232,7 @@ func (s *ConnectorSocket) nextRequest(ctx context.Context, conn *websocket.Conn)
 	buf := s.buffers.Get().([]byte)
 	defer s.buffers.Put(buf)
 
-	headerSize, err := bio.CopyDirect(buf, message)
+	headerSize, err := bio.Dump(buf, message)
 	if err != nil && err != io.EOF {
 		return nil, fmt.Errorf("RequestReadError: %w", err)
 	}
