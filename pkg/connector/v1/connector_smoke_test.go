@@ -26,7 +26,7 @@ func TestCanHandleGetRequest(t *testing.T) {
 func TestCanHandleReconnect(t *testing.T) {
 	expect := assert.New(t)
 
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 60; i++ {
 		req, _ := http.NewRequest("GET", testEndpoint("/get"), nil)
 		resp, err := testClient.Do(req)
 
@@ -90,4 +90,43 @@ func TestCanSendCookies(t *testing.T) {
 	expect.Nil(err)
 	expect.Equal("world", b["hello"])
 	expect.Equal("there", b["hi"])
+}
+
+func TestCanGetGzipData(t *testing.T) {
+	expect := assert.New(t)
+
+	req, err := http.NewRequest("GET", testEndpoint("/gzip"), nil)
+	expect.Nil(err)
+
+	resp, err := testClient.Do(req)
+	expect.Nil(err)
+	expect.Equal(200, resp.StatusCode)
+
+	defer resp.Body.Close()
+
+	binResp, err := bin(resp.Body)
+	expect.Nil(nil)
+	expect.Equal("gzip", binResp.Headers.AcceptEncoding[0])
+}
+
+func TestCanHandleRedirect(t *testing.T) {
+	expect := assert.New(t)
+
+	req, err := http.NewRequest("GET", testEndpoint("/redirect-to"), nil)
+	expect.Nil(err)
+
+	query := req.URL.Query()
+	query.Add("url", testEndpoint("/get"))
+	query.Add("status_code", "302")
+	req.URL.RawQuery = query.Encode()
+
+	resp, err := testClient.Do(req)
+	expect.Nil(err)
+	expect.Equal(200, resp.StatusCode)
+
+	defer resp.Body.Close()
+
+	binResp, err := bin(resp.Body)
+	expect.Nil(nil)
+	expect.Equal("gzip", binResp.Headers.AcceptEncoding[0])
 }

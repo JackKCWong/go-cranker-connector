@@ -1,5 +1,8 @@
 ### Check response status, headers, and content-type
-GET http://localhost:8080/get
+PUT http://localhost:8080/put
+Content-Type: text/plain
+
+hello world
 
 > {%
     client.test("Request executed successfully", function() {
@@ -15,15 +18,3 @@ GET http://localhost:8080/get
         client.assert(type === "application/json", "Expected 'application/json' but received '" + type + "'");
     });
 %}
-
-###
-GET http://localhost:8080/json
-
-
-###
-GET http://localhost:8080/cookies
-Cookie: hello=world
-
-
-###
-GET http://localhost:8080/redirect-to?status_code=302&url=/get
