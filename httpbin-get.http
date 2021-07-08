@@ -26,4 +26,8 @@ Cookie: hello=world
 
 
 ###
+GET https://localhost:8443/httpbin/headers
+Custom-header: hello=world
+
+###
 GET http://localhost:8080/redirect-to?status_code=302&url=/get

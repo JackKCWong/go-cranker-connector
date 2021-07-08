@@ -7,7 +7,7 @@ func Dump(buf []byte, src io.Reader) (int, error) {
 	for {
 		n, err := src.Read(buf[cur:])
 		cur += n
-		if err != nil {
+		if n == 0 || err != nil {
 			return cur, err
 		}
 	}

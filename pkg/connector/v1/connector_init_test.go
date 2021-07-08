@@ -46,7 +46,7 @@ func init() {
 			TLSClientConfig: tlsSkipVerify,
 			Proxy:           util.OSHttpProxy(),
 		},
-		Timeout: 1 * time.Second,
+		Timeout: 5 * time.Second,
 	}
 
 	// setup connector
