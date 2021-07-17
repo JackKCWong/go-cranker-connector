@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
 	"net/http"
@@ -46,10 +45,8 @@ func main() {
 	go func() {
 		defer wg.Done()
 		<-c
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 		log.Info().Msg("shutting down...")
-		conn.Shutdown(ctx)
+		conn.Shutdown()
 		log.Info().Msg("shutdown finished")
 	}()
 

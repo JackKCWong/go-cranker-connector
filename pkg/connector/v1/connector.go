@@ -100,7 +100,7 @@ func (c *Connector) Connect(
 }
 
 // Shutdown stops and clean up all sockets
-func (c *Connector) Shutdown(ctx context.Context) {
+func (c *Connector) Shutdown() {
 	defer log.Info().Msg("connector destroyed")
 
 	log.Info().
@@ -116,7 +116,7 @@ func (c *Connector) Shutdown(ctx context.Context) {
 		go func(s *cranker.ConnectorSocket) {
 			defer wg.Done()
 			log.Info().Str("socketId", s.UUID).Msg("socket closing")
-			err := s.Close(ctx)
+			err := s.Close(context.Background())
 			if err != nil {
 				log.Err(err).Msg("error closing socket")
 				return
