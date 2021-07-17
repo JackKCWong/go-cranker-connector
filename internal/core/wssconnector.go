@@ -35,17 +35,19 @@ type WSSConnector struct {
 
 // ConnectAndServe blocks until the WSSConnector.Shutdown() is called.
 func (wss *WSSConnector) ConnectAndServe() error {
-	var sem *semaphore.Weighted = semaphore.NewWeighted(int64(wss.SlidingWindow))
-	sigTerm, terminate := context.WithCancel(context.Background())
-	defer terminate()
-	wss.terminate = terminate
-	var err error
-
 	wss.log = log.With().
 		Str("serviceURL", wss.ServiceURL).
 		Str("serviceName", wss.ServiceName).
 		Str("registerURL", wss.RegisterURL).
 		Logger()
+
+	wss.log.Info().Msg("ConnectAndServe starting")
+
+	var sem *semaphore.Weighted = semaphore.NewWeighted(int64(wss.SlidingWindow))
+	sigTerm, terminate := context.WithCancel(context.Background())
+	defer terminate()
+	wss.terminate = terminate
+	var err error
 
 	for {
 		select {
@@ -53,13 +55,13 @@ func (wss *WSSConnector) ConnectAndServe() error {
 			return sigTerm.Err()
 		default:
 			wss.wg.Add(1)
+			err = sem.Acquire(sigTerm, 1)
+			if err != nil {
+				return err
+			}
+
 			go func() {
 				defer wss.wg.Done()
-
-				err = sem.Acquire(sigTerm, 1)
-				if err != nil {
-					return
-				}
 
 				var s *WssWorker = &WssWorker{
 					ServiceName:     wss.ServiceName,
@@ -87,6 +89,7 @@ func (wss *WSSConnector) ConnectAndServe() error {
 }
 
 func (wss *WSSConnector) Shutdown() {
+	wss.log.Info().Msg("shutting down")
 	wss.terminate()
 	wss.wg.Wait()
 }

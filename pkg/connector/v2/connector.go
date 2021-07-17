@@ -26,7 +26,6 @@ type Connector struct {
 
 func (c *Connector) Connect(crankerDiscovery Discoverer, slidingWindow int8) error {
 	c.m.Lock()
-	defer c.m.Unlock()
 
 	c.children = make(chan *core.WSSConnector, 256) // assuming we won't try to connect to more than 256 crankers
 
@@ -58,6 +57,8 @@ func (c *Connector) Connect(crankerDiscovery Discoverer, slidingWindow int8) err
 		Str("serviceURL", c.ServiceURL).
 		Str("serviceName", c.ServiceName).
 		Logger()
+
+	c.m.Unlock()
 
 	for _, url := range crankerDiscovery() {
 		wss := &core.WSSConnector{
