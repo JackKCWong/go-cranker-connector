@@ -39,6 +39,10 @@ func Retry(doOp Op, strategy BackoffStrategy) (interface{}, error) {
 	for {
 		v, opErr := doOp()
 		if opErr != nil {
+			if errors.Is(opErr, EndOfRetry) {
+				// ended
+				return nil, EndOfRetry
+			}
 			// retry on any operation error
 			duration, err := strategy.Backoff(opErr)
 			if err != nil {

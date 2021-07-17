@@ -14,20 +14,21 @@ import (
 type Discoverer func() []string
 
 type Connector struct {
-	m sync.Mutex
+	m                 sync.Mutex
 	ServiceName       string
 	ServiceURL        string
 	WSSHttpClient     *http.Client
 	ServiceHttpClient *http.Client
 	ShutdownTimeout   time.Duration
-	children 		  chan *core.WSSConnector
+	children          map[string]*core.WSSConnector
 	log               zerolog.Logger
 }
 
 func (c *Connector) Connect(crankerDiscovery Discoverer, slidingWindow int8) error {
 	c.m.Lock()
+	defer c.m.Unlock()
 
-	c.children = make(chan *core.WSSConnector, 256) // assuming we won't try to connect to more than 256 crankers
+	c.children = make(map[string]*core.WSSConnector)
 
 	if c.ServiceURL == "" {
 		return errors.New("requires ServiceURL")
@@ -58,8 +59,6 @@ func (c *Connector) Connect(crankerDiscovery Discoverer, slidingWindow int8) err
 		Str("serviceName", c.ServiceName).
 		Logger()
 
-	c.m.Unlock()
-
 	for _, url := range crankerDiscovery() {
 		wss := &core.WSSConnector{
 			RegisterURL:       url,
@@ -70,6 +69,8 @@ func (c *Connector) Connect(crankerDiscovery Discoverer, slidingWindow int8) err
 			WSSHttpClient:     c.WSSHttpClient,
 			ServiceHttpClient: c.ServiceHttpClient,
 		}
+
+		c.children[wss.RegisterURL] = wss
 
 		go func() {
 			err := wss.ConnectAndServe()
@@ -87,16 +88,27 @@ func (c *Connector) Connect(crankerDiscovery Discoverer, slidingWindow int8) err
 
 				return
 			}
-
-			c.log.Info().
-				Str("crankerWSS", wss.RegisterURL).
-				Msg("wss connector exited gracefully")
 		}()
 	}
+
+	c.log.Info().
+		Msg("connector started")
 
 	return nil
 }
 
 func (c *Connector) Shutdown() {
+	c.m.Lock()
+	defer c.m.Unlock()
 
+	wg := &sync.WaitGroup{}
+	for _, wss := range c.children {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			wss.Shutdown()
+		}()
+	}
+
+	wg.Wait()
 }

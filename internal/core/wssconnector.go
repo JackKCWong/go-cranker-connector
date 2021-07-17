@@ -33,7 +33,7 @@ type WSSConnector struct {
 }
 
 
-// ConnectAndServe blocks until the WSSConnector.Shutdown() is called.
+// ConnectAndServe blocks until the *WSSConnector.Shutdown() is called.
 func (wss *WSSConnector) ConnectAndServe() error {
 	wss.log = log.With().
 		Str("serviceURL", wss.ServiceURL).
@@ -52,14 +52,15 @@ func (wss *WSSConnector) ConnectAndServe() error {
 	for {
 		select {
 		case <-sigTerm.Done():
+			wss.log.Info().Msg("terminating...")
 			return sigTerm.Err()
 		default:
-			wss.wg.Add(1)
 			err = sem.Acquire(sigTerm, 1)
 			if err != nil {
 				return err
 			}
 
+			wss.wg.Add(1)
 			go func() {
 				defer wss.wg.Done()
 

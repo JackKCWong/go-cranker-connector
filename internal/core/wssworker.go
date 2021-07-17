@@ -76,15 +76,16 @@ func (w *WssWorker) Dial(sigTerm context.Context, hc *http.Client) error {
 			})
 
 		if err != nil {
-			w.log.Error().
-				Err(err).
-				Msg("failed to connect to cranker router")
-
 			if errors.Is(err, context.Canceled) {
 				// stop retry
+				w.log.Info().Msg("cancelled connecting to cranker")
 				return nil, retry.EndOfRetry
 			} else {
 				// timeout during dial, retry
+				w.log.Error().
+					Err(err).
+					Msg("failed to connect to cranker router")
+
 				return nil, err
 			}
 		} else {
@@ -239,8 +240,13 @@ func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, clie
 	req, err := w.nextRequest(sigTerm, buf)
 	sem.Release(1)
 	if err != nil {
-		w.log.Error().AnErr("readReqErr", err).Msg("error reading request")
-		return err
+		if errors.Is(err, context.Canceled) {
+			w.log.Info().Msg("cancelled waiting for request")
+			return err
+		} else {
+			w.log.Error().AnErr("readReqErr", err).Msg("error reading request")
+			return err
+		}
 	}
 
 	sigKill := util.WithGrace(sigTerm, w.ShutdownTimeout)
@@ -248,23 +254,41 @@ func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, clie
 
 	resp, err := w.sendRequest(client, req)
 	if err != nil {
-		errId := uuid.NewString()
-		w.log.Error().
-			AnErr("reqErr", err).
-			Str("errorId", errId).
-			Msg("error sending request")
+		if errors.Is(err, context.Canceled) {
+			w.log.Warn().
+				Msg("cancelled in-flight request")
 
-		resp = &http.Response{
-			Status:     "500 Server Error",
-			StatusCode: 500,
-			Body:       ioutil.NopCloser(bytes.NewBufferString(fmt.Sprintf("errorId=%s\n", errId))),
+			resp = &http.Response{
+				Status:     "504 Gateway Timeout",
+				StatusCode: 504,
+				Body:       nil,
+			}
+		} else {
+			errId := uuid.NewString()
+			w.log.Error().
+				AnErr("reqErr", err).
+				Str("errorId", errId).
+				Msg("error sending request")
+
+			resp = &http.Response{
+				Status:     "500 Server Error",
+				StatusCode: 500,
+				Body:       ioutil.NopCloser(bytes.NewBufferString(fmt.Sprintf("errorId=%s\n", errId))),
+			}
 		}
 	}
 
 	err = w.sendResponse(sigKill, resp, buf)
 	if err != nil {
-		w.log.Error().AnErr("respErr", err).Msg("error sending response")
-		return err
+		if errors.Is(err, context.Canceled) {
+			w.log.Warn().
+				Msg("cancelled in-flight response")
+
+			return err
+		} else {
+			w.log.Error().AnErr("respErr", err).Msg("error sending response")
+			return err
+		}
 	}
 
 	return nil
