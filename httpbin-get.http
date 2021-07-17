@@ -31,3 +31,8 @@ Custom-header: hello=world
 
 ###
 GET http://localhost:8080/redirect-to?status_code=302&url=/get
+
+###
+GET https://httpbin.org/headers
+Custom-header: hello=world
+

@@ -41,3 +41,24 @@ func TestCanHandleLargeHeaders(t *testing.T) {
 		expect.Equal(fmt.Sprintf(`["%s"]`, strings.Repeat(strconv.Itoa(i), 1024)), string(b[fmt.Sprintf("X-Header%d", i)]))
 	}
 }
+
+func TestCanHandleDrip(t *testing.T) {
+	expect := assert.New(t)
+	req, err := http.NewRequest("GET", testEndpoint("/drip"), nil)
+	expect.Nil(err)
+
+	query := req.URL.Query()
+	query.Add("duration", "0.01")
+	query.Add("numbytes", "1024")
+	query.Add("delay", "1")
+	req.URL.RawQuery = query.Encode()
+
+	resp, err := testClient.Do(req)
+	expect.Nil(err)
+
+	defer resp.Body.Close()
+	buf, err := ioutil.ReadAll(resp.Body)
+	expect.Nil(err)
+
+	expect.Len(buf, 1024)
+}

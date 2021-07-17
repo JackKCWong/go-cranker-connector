@@ -71,15 +71,13 @@ func (wss *WSSConnector) ConnectAndServe() error {
 				}
 
 				err = s.Dial(sigTerm, wss.WSSHttpClient)
-				sem.Release(1)
-
 				if err != nil {
 					return
 				}
 
 				buf := rawBuffers.Get().([]byte)
 				defer rawBuffers.Put(buf)
-				err = s.Serve(sigTerm, wss.ServiceHttpClient, buf)
+				err = s.Serve(sigTerm, sem, wss.ServiceHttpClient, buf)
 				if err != nil {
 					return
 				}

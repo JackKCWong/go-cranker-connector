@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/semaphore"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -224,7 +225,7 @@ func (w *WssWorker) pumpRequestBody(ctx context.Context, out *io.PipeWriter, buf
 	}
 }
 
-func (w *WssWorker) Serve(sigTerm context.Context, client *http.Client, buf []byte) error {
+func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, client *http.Client, buf []byte) error {
 	defer func(conn *websocket.Conn, code websocket.StatusCode, reason string) {
 		err := conn.Close(code, reason)
 		if err != nil {
@@ -236,6 +237,7 @@ func (w *WssWorker) Serve(sigTerm context.Context, client *http.Client, buf []by
 		Msg("waiting for request")
 
 	req, err := w.nextRequest(sigTerm, buf)
+	sem.Release(1)
 	if err != nil {
 		w.log.Error().AnErr("readReqErr", err).Msg("error reading request")
 		return err
