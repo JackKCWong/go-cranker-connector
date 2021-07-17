@@ -3,8 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
-	"github.com/JackKCWong/go-cranker-connector/pkg/config"
-	"github.com/JackKCWong/go-cranker-connector/pkg/connector/v1"
+	"github.com/JackKCWong/go-cranker-connector/pkg/connector/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -19,21 +19,18 @@ func main() {
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 
 	tlsSkipVerify := &tls.Config{InsecureSkipVerify: true}
-	conn := connector.NewConnector(
-		&config.RouterConfig{
-			TLSClientConfig:   tlsSkipVerify,
-		},
-		&config.ServiceConfig{
-			HTTPClient: &http.Client{
-				Transport: &http.Transport{
-					TLSClientConfig: tlsSkipVerify,
-				},
-			},
-		})
 
 	crankerWss := os.Args[1]
 	serviceName := os.Args[2]
 	serviceURL := os.Args[3]
+
+	conn := connector.Connector{
+		ServiceName:       serviceName,
+		ServiceURL:        serviceURL,
+		WSSHttpClient:     &http.Client{Transport: &http.Transport{TLSClientConfig: tlsSkipVerify}},
+		ServiceHttpClient: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsSkipVerify}},
+		ShutdownTimeout:   5 * time.Second,
+	}
 
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
@@ -47,7 +44,10 @@ func main() {
 		log.Info().Msg("shutdown finished")
 	}()
 
-	err := conn.Connect([]string{crankerWss}, 2, serviceName, serviceURL)
+	err := conn.Connect(func() []string {
+		return []string{fmt.Sprintf("%s/%s", crankerWss, "register")}
+	}, 2)
+
 	if err != nil {
 		fmt.Printf("Error connecting cranker %s, err: %q", crankerWss, err)
 		return

@@ -5,6 +5,7 @@ go 1.14
 require (
 	github.com/google/uuid v1.2.0
 	github.com/mccutchen/go-httpbin/v2 v2.2.0
+	github.com/pkg/errors v0.8.1
 	github.com/rs/zerolog v1.20.0
 	github.com/stretchr/testify v1.7.0
 	golang.org/x/sync v0.0.0-20190423024810-112230192c58

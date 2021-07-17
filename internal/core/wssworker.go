@@ -226,13 +226,26 @@ func (w *WssWorker) pumpRequestBody(ctx context.Context, out *io.PipeWriter, buf
 	}
 }
 
-func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, client *http.Client, buf []byte) error {
-	defer func(conn *websocket.Conn, code websocket.StatusCode, reason string) {
-		err := conn.Close(code, reason)
-		if err != nil {
-			w.log.Info().Msg("error closing wss connection")
+func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, client *http.Client, buf []byte) (retErr error) {
+	defer func(conn *websocket.Conn) {
+		if retErr == nil {
+			w.log.Info().Msg("wss connection closed after response finished")
+			err := conn.Close(websocket.StatusNormalClosure, "response finished")
+			if err != nil {
+				w.log.Err(err).Msg("error closing wss connection")
+			}
+		} else {
+			if errors.Is(retErr, context.Canceled) {
+				w.log.Info().Msg("wss connection cancelled, closed gracefully")
+				// the connection is cancelled, so already closed
+			} else {
+				err := conn.Close(websocket.StatusAbnormalClosure, "shouldn't end up here, fix it")
+				if err != nil {
+					w.log.Err(err).Msg("error closing wss connection")
+				}
+			}
 		}
-	}(w.conn, websocket.StatusNormalClosure, "close requested by client")
+	}(w.conn)
 
 	w.log.Info().
 		Msg("waiting for request")

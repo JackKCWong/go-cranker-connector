@@ -79,11 +79,11 @@ func (c *Connector) Connect(crankerDiscovery Discoverer, slidingWindow int8) err
 				case context.Canceled:
 					c.log.Info().
 						Str("crankerWSS", wss.RegisterURL).
-						Msg("wss connector exited gracefully")
+						Msg("wss connector exiting gracefully")
 				case context.DeadlineExceeded:
 					c.log.Info().
 						Str("crankerWSS", wss.RegisterURL).
-						Msg("wss connector exited forcefully")
+						Msg("wss connector exiting forcefully")
 				}
 
 				return

@@ -23,7 +23,6 @@ For logging config, see [zerolog](https://github.com/rs/zerolog)
 
 - [x] retry connection with exp backoff.
 - [x] streaming body
-- [ ] server-sent-event support 
 - [ ] graceful shutdown: hand waving with cranker.
 - [ ] health monitoring
 - [ ] dns discovery

@@ -91,4 +91,5 @@ func (wss *WSSConnector) Shutdown() {
 	wss.log.Info().Msg("shutting down")
 	wss.terminate()
 	wss.wg.Wait()
+	wss.log.Info().Msg("wss connector is down")
 }
