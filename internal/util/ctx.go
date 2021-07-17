@@ -2,7 +2,7 @@ package util
 
 import (
 	"context"
-	"github.com/pkg/errors"
+	"fmt"
 	"time"
 )
 
@@ -16,7 +16,7 @@ func (c GraceContext) Done() <-chan struct{} {
 }
 
 func (c GraceContext) Err() error {
-	return errors.Wrap(context.DeadlineExceeded, "grace timeout exceeded")
+	return fmt.Errorf("grace timeout exceeded: %w", context.DeadlineExceeded)
 }
 
 func (c GraceContext) Deadline() (deadline time.Time, ok bool) {

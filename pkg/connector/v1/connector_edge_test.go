@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestCanHandleLargeHeaders(t *testing.T) {
+func xTestCanHandleLargeHeaders(t *testing.T) {
 	expect := assert.New(t)
 	req, err := http.NewRequest("GET", testEndpoint("/headers"), nil)
 	expect.Nil(err)
