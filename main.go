@@ -3,17 +3,15 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
+	"github.com/JackKCWong/go-cranker-connector/pkg/config"
+	"github.com/JackKCWong/go-cranker-connector/pkg/connector/v1"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
-	"time"
-
-	"github.com/JackKCWong/go-cranker-connector/pkg/config"
-	"github.com/JackKCWong/go-cranker-connector/pkg/connector/v1"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 func main() {
@@ -24,7 +22,6 @@ func main() {
 	conn := connector.NewConnector(
 		&config.RouterConfig{
 			TLSClientConfig:   tlsSkipVerify,
-			WSHandshakTimeout: 1 * time.Second,
 		},
 		&config.ServiceConfig{
 			HTTPClient: &http.Client{

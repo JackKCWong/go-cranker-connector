@@ -50,6 +50,7 @@ func (w *WssWorker) init() error {
 
 func (w *WssWorker) Dial(sigTerm context.Context, hc *http.Client) error {
 	err := w.init()
+	w.log.Info().Msg("dialing")
 	if err != nil {
 		w.log.Err(err).Msg("failed to init WssWorker")
 		return err
@@ -62,8 +63,6 @@ func (w *WssWorker) Dial(sigTerm context.Context, hc *http.Client) error {
 	backoff := retry.Randomize(&retry.ExpBackoff{MinInterval: 5 * time.Second, MaxInterval: 30 * time.Second}, 5*time.Second)
 
 	conn, err := retry.Retry(func() (interface{}, error) {
-		w.log.Info().Msg("dialing")
-
 		dialCtx, cancelDial := context.WithTimeout(sigTerm, 30*time.Second)
 		defer cancelDial()
 

@@ -17,6 +17,7 @@ var rawBuffers *sync.Pool = &sync.Pool{
 	},
 }
 
+// WSSConnector connects to a single cranker wss url.
 type WSSConnector struct {
 	ServiceName       string
 	ServiceURL        string
@@ -31,6 +32,8 @@ type WSSConnector struct {
 	log               zerolog.Logger
 }
 
+
+// ConnectAndServe blocks until the WSSConnector.Shutdown() is called.
 func (wss *WSSConnector) ConnectAndServe() error {
 	var sem *semaphore.Weighted = semaphore.NewWeighted(int64(wss.SlidingWindow))
 	sigTerm, terminate := context.WithCancel(context.Background())

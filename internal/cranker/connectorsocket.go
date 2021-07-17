@@ -103,8 +103,8 @@ func (s *ConnectorSocket) Close(ctx context.Context) error {
 }
 
 func (s *ConnectorSocket) dial(parent context.Context) (*websocket.Conn, error) {
-	s.redialLock.Lock()
 	s.log.Info().Msg("dialing")
+	s.redialLock.Lock()
 	headers := http.Header{}
 	headers.Add("CrankerProtocol", "1.0")
 	headers.Add("Route", s.serviceName)

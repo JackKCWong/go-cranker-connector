@@ -82,7 +82,6 @@ func newConnector() *Connector {
 	return NewConnector(
 		&config.RouterConfig{
 			TLSClientConfig:   tlsSkipVerify,
-			WSHandshakTimeout: 1 * time.Second,
 		},
 		&config.ServiceConfig{
 			HTTPClient: &http.Client{
