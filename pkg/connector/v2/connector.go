@@ -14,19 +14,19 @@ import (
 type Discoverer func() []string
 
 type Connector struct {
-	m                 sync.Mutex
-	ServiceName       string
-	ServiceURL        string
-	WSSHttpClient     *http.Client
-	ServiceHttpClient *http.Client
-	ShutdownTimeout   time.Duration
-	children          map[string]*core.WSSConnector
-	log               zerolog.Logger
+	ServiceName         string
+	ServiceURL          string
+	WSSHttpClient       *http.Client
+	ServiceHttpClient   *http.Client
+	ShutdownTimeout     time.Duration
+	RediscoveryInterval time.Duration
+	m                   sync.Mutex
+	children            map[string]*core.WSSConnector
+	log                 zerolog.Logger
 }
 
-func (c *Connector) Connect(crankerDiscovery Discoverer, slidingWindow int8) error {
+func (c *Connector) Connect(crankerDiscoverer Discoverer, slidingWindow int8) error {
 	c.m.Lock()
-	defer c.m.Unlock()
 
 	c.children = make(map[string]*core.WSSConnector)
 
@@ -50,6 +50,10 @@ func (c *Connector) Connect(crankerDiscovery Discoverer, slidingWindow int8) err
 		c.ShutdownTimeout = 5 * time.Second
 	}
 
+	if c.RediscoveryInterval == 0 {
+		c.RediscoveryInterval = 60 * time.Second
+	}
+
 	if slidingWindow <= 0 {
 		return errors.New("slidingWindow must be greater than 0")
 	}
@@ -59,37 +63,69 @@ func (c *Connector) Connect(crankerDiscovery Discoverer, slidingWindow int8) err
 		Str("serviceName", c.ServiceName).
 		Logger()
 
-	for _, url := range crankerDiscovery() {
-		wss := &core.WSSConnector{
-			RegisterURL:       url,
-			SlidingWindow:     slidingWindow,
-			ServiceName:       c.ServiceName,
-			ServiceURL:        c.ServiceURL,
-			ShutdownTimeout:   c.ShutdownTimeout,
-			WSSHttpClient:     c.WSSHttpClient,
-			ServiceHttpClient: c.ServiceHttpClient,
-		}
-
-		c.children[wss.RegisterURL] = wss
-
-		go func() {
-			err := wss.ConnectAndServe()
-			if err != nil {
-				switch err {
-				case context.Canceled:
-					c.log.Info().
-						Str("crankerWSS", wss.RegisterURL).
-						Msg("wss connector exiting gracefully")
-				case context.DeadlineExceeded:
-					c.log.Info().
-						Str("crankerWSS", wss.RegisterURL).
-						Msg("wss connector exiting forcefully")
+	c.m.Unlock()
+	crankerDiscoverChan := make(chan string, 10)
+	go func() {
+		// discovery
+		for {
+			urls := crankerDiscoverer()
+			c.m.Lock()
+			var latest map[string]bool = make(map[string]bool)
+			for _, url := range urls {
+				latest[url] = true
+				_, exist := c.children[url]
+				if !exist {
+					crankerDiscoverChan <- url
 				}
-
-				return
 			}
-		}()
-	}
+
+			for existing, wss := range c.children {
+				if !latest[existing] {
+					delete(c.children, existing)
+					go wss.Shutdown()
+				}
+			}
+			c.m.Unlock()
+			<-time.After(c.RediscoveryInterval)
+		}
+	}()
+
+	go func() {
+		// connect and serve
+		for url := range crankerDiscoverChan {
+			wss := &core.WSSConnector{
+				RegisterURL:       url,
+				SlidingWindow:     slidingWindow,
+				ServiceName:       c.ServiceName,
+				ServiceURL:        c.ServiceURL,
+				ShutdownTimeout:   c.ShutdownTimeout,
+				WSSHttpClient:     c.WSSHttpClient,
+				ServiceHttpClient: c.ServiceHttpClient,
+			}
+
+			c.m.Lock()
+			c.children[wss.RegisterURL] = wss
+			c.m.Unlock()
+
+			go func() {
+				err := wss.ConnectAndServe()
+				if err != nil {
+					switch err {
+					case context.Canceled:
+						c.log.Info().
+							Str("crankerWSS", wss.RegisterURL).
+							Msg("wss connector exiting gracefully")
+					case context.DeadlineExceeded:
+						c.log.Info().
+							Str("crankerWSS", wss.RegisterURL).
+							Msg("wss connector exiting forcefully")
+					}
+
+					return
+				}
+			}()
+		}
+	}()
 
 	c.log.Info().
 		Msg("connector started")
