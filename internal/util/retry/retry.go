@@ -9,14 +9,24 @@ import (
 	"time"
 )
 
+// Op should return a nil error when succeeded. Or signal a retry with a non-nil error other than EndOfRetry.
+// EndOfRetry error is meant to be used with context cancellation which is common in go.
 type Op func() (interface{}, error)
 
 type BackoffStrategy interface {
-	Backoff(err error) (time.Duration, error)
+	// Backoff returns an time.Duration to wait before next retry starts or a non-nil error to stop retry.
+	// lastError comes from Op and the BackoffStrategy may / may not consider it as part of the strategy.
+	Backoff(lastError error) (time.Duration, error)
 }
 
-type AsBackoff func(err error) (time.Duration, error)
+// AsBackoff wraps a simple function into a BackoffStrategy
+type AsBackoff func(lastError error) (time.Duration, error)
 
+func (backoffFn AsBackoff) Backoff(lastError error) (time.Duration, error) {
+	return backoffFn(lastError)
+}
+
+// Randomize add a random jitter in between retries to avoid retry storm.
 func Randomize(strategy BackoffStrategy, randomness time.Duration) BackoffStrategy {
 	return AsBackoff(func(err error) (time.Duration, error) {
 		backoff, err := strategy.Backoff(err)
@@ -29,12 +39,9 @@ func Randomize(strategy BackoffStrategy, randomness time.Duration) BackoffStrate
 	})
 }
 
-func (backoffFn AsBackoff) Backoff(err error) (time.Duration, error) {
-	return backoffFn(err)
-}
-
 var EndOfRetry = errors.New("end of retry")
 
+// Retry until Op returns nil / EndOfRetry error, or BackoffStrategy returns any non-nil error
 func Retry(doOp Op, strategy BackoffStrategy) (interface{}, error) {
 	for {
 		v, opErr := doOp()
@@ -60,11 +67,13 @@ func Retry(doOp Op, strategy BackoffStrategy) (interface{}, error) {
 	}
 }
 
+
+// ExpBackoff is a exponential backoff strategy with optional upper bounds like MaxRetry / MaxInterval
 type ExpBackoff struct {
-	retryCount  int
 	MaxRetry    int
 	MinInterval time.Duration
 	MaxInterval time.Duration
+	retryCount  int
 	init        sync.Once
 }
 
@@ -79,7 +88,7 @@ func (b *ExpBackoff) setDefaults() {
 	}
 }
 
-func (b *ExpBackoff) Backoff(err error) (time.Duration, error) {
+func (b *ExpBackoff) Backoff(_ error) (time.Duration, error) {
 	b.init.Do(b.setDefaults)
 
 	if b.retryCount >= b.MaxRetry {
