@@ -30,7 +30,6 @@ type WSSConnector struct {
 	log               zerolog.Logger
 }
 
-
 // ConnectAndServe blocks until the *WSSConnector.Shutdown() is called.
 func (wss *WSSConnector) ConnectAndServe() error {
 	wss.log = log.With().
@@ -72,6 +71,7 @@ func (wss *WSSConnector) ConnectAndServe() error {
 
 				err = s.Dial(sigTerm, wss.WSSHttpClient)
 				if err != nil {
+					wss.log.Err(err).Msg("failed to dial")
 					return
 				}
 
@@ -79,6 +79,7 @@ func (wss *WSSConnector) ConnectAndServe() error {
 				defer rawBuffers.Put(buf)
 				err = s.Serve(sigTerm, sem, wss.ServiceHttpClient, buf)
 				if err != nil {
+					wss.log.Err(err).Msg("failed to serve")
 					return
 				}
 			}()

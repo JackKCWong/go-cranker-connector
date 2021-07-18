@@ -247,6 +247,23 @@ func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, clie
 		}
 	}(w.conn)
 
+	go func(conn *websocket.Conn) {
+		for {
+			<-time.After(1 * time.Minute)
+			err := conn.Ping(sigTerm)
+			if err != nil {
+				w.log.Err(err).Msg("error during ping/pong")
+				// at this point I THINK the connection is dead and closed, so the conn.Reader should have returned with error.
+				// but I haven't tested.
+				err := conn.Close(websocket.StatusAbnormalClosure, "no response to ping")
+				if err != nil {
+					w.log.Err(err).Msg("error closing wss connection")
+				}
+				return
+			}
+		}
+	}(w.conn)
+
 	w.log.Info().
 		Msg("waiting for request")
 
@@ -267,9 +284,9 @@ func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, clie
 
 	resp, err := w.sendRequest(client, req)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		if errors.Is(err, context.DeadlineExceeded) {
 			w.log.Warn().
-				Msg("cancelled in-flight request")
+				Msg("in-flight request timeout during grace period")
 
 			resp = &http.Response{
 				Status:     "504 Gateway Timeout",
@@ -293,9 +310,9 @@ func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, clie
 
 	err = w.sendResponse(sigKill, resp, buf)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		if errors.Is(err, context.DeadlineExceeded) {
 			w.log.Warn().
-				Msg("cancelled in-flight response")
+				Msg("in-flight response timeout during grace period")
 
 			return err
 		} else {
