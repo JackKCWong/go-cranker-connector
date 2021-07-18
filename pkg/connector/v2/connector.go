@@ -26,6 +26,7 @@ type Connector struct {
 	ShutdownTimeout time.Duration
 	// RediscoveryInterval is the interval to run the Discoverer function to reconnect to crankers.
 	// The Connector does a diff of the Discoverer result and current connections to decide if keep/add/remove.
+	// A zero value means never rediscover beyond the first time.
 	RediscoveryInterval time.Duration
 	m                   sync.Mutex
 	children            *sync.Map
@@ -55,10 +56,6 @@ func (c *Connector) Connect(crankerDiscoverer Discoverer, slidingWindow int8) er
 
 	if c.ShutdownTimeout == 0 {
 		c.ShutdownTimeout = 5 * time.Second
-	}
-
-	if c.RediscoveryInterval == 0 {
-		c.RediscoveryInterval = 60 * time.Second
 	}
 
 	if slidingWindow <= 0 {
@@ -93,7 +90,13 @@ func (c *Connector) Connect(crankerDiscoverer Discoverer, slidingWindow int8) er
 
 				return true
 			})
-			<-time.After(c.RediscoveryInterval)
+			if c.RediscoveryInterval == 0 {
+				close(crankerDiscoverChan)
+				return
+			} else {
+				<-time.After(c.RediscoveryInterval)
+				continue
+			}
 		}
 	}()
 

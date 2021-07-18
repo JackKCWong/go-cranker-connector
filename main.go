@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -45,7 +46,12 @@ func main() {
 	}()
 
 	err := conn.Connect(func() []string {
-		return []string{fmt.Sprintf("%s/%s", crankerWss, "register")}
+		crankers := strings.Split(crankerWss, ",")
+		urls := make([]string, len(crankers))
+		for i, wss := range crankers {
+			urls[i] = fmt.Sprintf("%s/%s", wss, "register")
+		}
+		return urls
 	}, 2)
 
 	if err != nil {
