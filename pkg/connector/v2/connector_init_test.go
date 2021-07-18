@@ -8,6 +8,7 @@ import (
 	"github.com/mccutchen/go-httpbin/v2/httpbin"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/stretchr/testify/require"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -57,7 +58,7 @@ func setup() {
 			TLSClientConfig: tlsSkipVerify,
 			Proxy:           util.OSHttpProxy(),
 		},
-		Timeout: 5 * time.Second,
+		Timeout: 30 * time.Second,
 	}
 
 	crankerURL = os.Getenv("CRANKER_TEST_URL")
@@ -144,4 +145,20 @@ type Headers struct {
 	ContentType    []string `json:"Content-Type"`
 	Host           []string `json:"Host"`
 	UserAgent      []string `json:"User-Agent"`
+}
+
+type Expect struct {
+	t *testing.T
+}
+
+func (e Expect) Nil(v interface{}) {
+	require.Nil(e.t, v)
+}
+
+func (e Expect) Nilf(v interface{}, msg string, args ...interface{}) {
+	require.Nilf(e.t, v, msg, args)
+}
+
+func (e Expect) Equal(exp interface{}, actual interface{}) {
+	require.Equal(e.t, exp, actual)
 }

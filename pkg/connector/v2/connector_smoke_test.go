@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"net/http"
 	"testing"
@@ -12,7 +11,8 @@ import (
 )
 
 func TestCanHandleGetRequest(t *testing.T) {
-	expect := assert.New(t)
+	t.Parallel()
+	expect := Expect{t}
 
 	req, _ := http.NewRequest("GET", testEndpoint("/get"), nil)
 	resp, err := testClient.Do(req)
@@ -24,7 +24,8 @@ func TestCanHandleGetRequest(t *testing.T) {
 }
 
 func TestCanHandleReconnect(t *testing.T) {
-	expect := assert.New(t)
+	t.Parallel()
+	expect := Expect{t}
 
 	for i := 0; i < 60; i++ {
 		req, _ := http.NewRequest("GET", testEndpoint("/get"), nil)
@@ -40,9 +41,10 @@ func TestCanHandleReconnect(t *testing.T) {
 }
 
 func TestCanHandlePostRequest(t *testing.T) {
-	expect := assert.New(t)
+	t.Parallel()
+	expect := Expect{t}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	req, _ := http.NewRequest("POST",
@@ -70,7 +72,8 @@ func TestCanHandlePostRequest(t *testing.T) {
 }
 
 func TestCanSendCookies(t *testing.T) {
-	expect := assert.New(t)
+	t.Parallel()
+	expect := Expect{t}
 	req, err := http.NewRequest("GET", testEndpoint("/cookies"), nil)
 	expect.Nil(err)
 
@@ -93,7 +96,8 @@ func TestCanSendCookies(t *testing.T) {
 }
 
 func TestCanGetGzipData(t *testing.T) {
-	expect := assert.New(t)
+	t.Parallel()
+	expect := Expect{t}
 
 	req, err := http.NewRequest("GET", testEndpoint("/gzip"), nil)
 	expect.Nil(err)
@@ -110,7 +114,8 @@ func TestCanGetGzipData(t *testing.T) {
 }
 
 func TestCanHandleRedirect(t *testing.T) {
-	expect := assert.New(t)
+	t.Parallel()
+	expect := Expect{t}
 
 	req, err := http.NewRequest("GET", testEndpoint("/redirect-to"), nil)
 	expect.Nil(err)

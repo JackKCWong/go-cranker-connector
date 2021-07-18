@@ -3,7 +3,6 @@ package connector
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"net/http"
 	"strconv"
@@ -12,7 +11,8 @@ import (
 )
 
 func TestCanHandleLargeHeaders(t *testing.T) {
-	expect := assert.New(t)
+	t.Parallel()
+	expect := Expect{t}
 	req, err := http.NewRequest("GET", testEndpoint("/headers"), nil)
 	expect.Nil(err)
 
@@ -43,7 +43,8 @@ func TestCanHandleLargeHeaders(t *testing.T) {
 }
 
 func TestCanHandleDrip(t *testing.T) {
-	expect := assert.New(t)
+	t.Parallel()
+	expect := Expect{t}
 	req, err := http.NewRequest("GET", testEndpoint("/drip"), nil)
 	expect.Nil(err)
 
@@ -60,5 +61,5 @@ func TestCanHandleDrip(t *testing.T) {
 	buf, err := ioutil.ReadAll(resp.Body)
 	expect.Nil(err)
 
-	expect.Len(buf, 1024)
+	expect.Equal(1024, len(buf))
 }
