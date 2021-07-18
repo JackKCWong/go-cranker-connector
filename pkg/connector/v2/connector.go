@@ -14,21 +14,28 @@ import (
 type Discoverer func() []string
 
 type Connector struct {
-	ServiceName         string
-	ServiceURL          string
-	WSSHttpClient       *http.Client
-	ServiceHttpClient   *http.Client
-	ShutdownTimeout     time.Duration
+	// ServiceName is registered to cranker to prefix the url under cranker. e.g. hello-world is accessible via /hello-world
+	ServiceName string
+	// ServiceURL is the root URL where the service is running
+	ServiceURL string
+	// WSSHttpClient is the cranker facing http client used for websocket connection
+	WSSHttpClient *http.Client
+	// ServiceHttpClient is the service facing http client used for servicing request/response
+	ServiceHttpClient *http.Client
+	// ShutdownTimeout is the grace period for shutdown. Any long running request/response isn't finish before timeout are cancelled.
+	ShutdownTimeout time.Duration
+	// RediscoveryInterval is the interval to run the Discoverer function to reconnect to crankers.
+	// The Connector does a diff of the Discoverer result and current connections to decide if keep/add/remove.
 	RediscoveryInterval time.Duration
 	m                   sync.Mutex
-	children            map[string]*core.WSSConnector
+	children            *sync.Map
 	log                 zerolog.Logger
 }
 
 func (c *Connector) Connect(crankerDiscoverer Discoverer, slidingWindow int8) error {
 	c.m.Lock()
 
-	c.children = make(map[string]*core.WSSConnector)
+	c.children = &sync.Map{}
 
 	if c.ServiceURL == "" {
 		return errors.New("requires ServiceURL")
@@ -69,23 +76,23 @@ func (c *Connector) Connect(crankerDiscoverer Discoverer, slidingWindow int8) er
 		// discovery
 		for {
 			urls := crankerDiscoverer()
-			c.m.Lock()
 			var latest map[string]bool = make(map[string]bool)
 			for _, url := range urls {
 				latest[url] = true
-				_, exist := c.children[url]
+				_, exist := c.children.Load(url)
 				if !exist {
 					crankerDiscoverChan <- url
 				}
 			}
 
-			for existing, wss := range c.children {
-				if !latest[existing] {
-					delete(c.children, existing)
-					go wss.Shutdown()
+			c.children.Range(func(existing, wss interface{}) bool {
+				if !latest[existing.(string)] {
+					c.children.Delete(existing)
+					go wss.(*core.WSSConnector).Shutdown()
 				}
-			}
-			c.m.Unlock()
+
+				return true
+			})
 			<-time.After(c.RediscoveryInterval)
 		}
 	}()
@@ -103,9 +110,7 @@ func (c *Connector) Connect(crankerDiscoverer Discoverer, slidingWindow int8) er
 				ServiceHttpClient: c.ServiceHttpClient,
 			}
 
-			c.m.Lock()
-			c.children[wss.RegisterURL] = wss
-			c.m.Unlock()
+			c.children.Store(wss.RegisterURL, wss)
 
 			go func() {
 				err := wss.ConnectAndServe()
@@ -138,13 +143,14 @@ func (c *Connector) Shutdown() {
 	defer c.m.Unlock()
 
 	wg := &sync.WaitGroup{}
-	for _, wss := range c.children {
+	c.children.Range(func(_, wss interface{}) bool {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			wss.Shutdown()
+			wss.(*core.WSSConnector).Shutdown()
 		}()
-	}
+		return true
+	})
 
 	wg.Wait()
 }

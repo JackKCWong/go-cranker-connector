@@ -25,6 +25,7 @@ import (
 var buffers *pools.BufferPool = pools.NewBufferPool()
 
 type WssWorker struct {
+	ID              string
 	ServiceName     string
 	RegisterURL     string
 	ServiceURL      string
@@ -32,13 +33,12 @@ type WssWorker struct {
 	log             zerolog.Logger
 	conn            *websocket.Conn
 	servicePrefix   string
-	id              string
 }
 
 func (w *WssWorker) init() error {
-	w.id = uuid.NewString()
+	w.ID = uuid.NewString()
 	w.log = log.With().
-		Str("connId", w.id).
+		Str("connId", w.ID).
 		Str("routerURL", w.RegisterURL).
 		Str("serviceURL", w.ServiceURL).
 		Str("serviceName", w.ServiceName).

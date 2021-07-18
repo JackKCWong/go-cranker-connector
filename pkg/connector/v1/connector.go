@@ -12,6 +12,7 @@ import (
 )
 
 // Connector connects the local service to crankers
+// Deprecated: please use v2/connector which is more robust and has more features
 type Connector struct {
 	routerURLs       []*url.URL
 	serviceURL       *url.URL

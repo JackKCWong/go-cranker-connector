@@ -6,7 +6,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/semaphore"
 	"net/http"
-	"nhooyr.io/websocket"
 	"sync"
 	"time"
 )
@@ -27,8 +26,7 @@ type WSSConnector struct {
 	WSSHttpClient     *http.Client
 	ServiceHttpClient *http.Client
 	terminate         context.CancelFunc
-	wg                sync.WaitGroup
-	connections       map[string]*websocket.Conn
+	wg                *sync.WaitGroup
 	log               zerolog.Logger
 }
 
@@ -47,6 +45,7 @@ func (wss *WSSConnector) ConnectAndServe() error {
 	sigTerm, terminate := context.WithCancel(context.Background())
 	defer terminate()
 	wss.terminate = terminate
+	wss.wg = &sync.WaitGroup{}
 	var err error
 
 	for {
