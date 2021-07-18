@@ -46,4 +46,5 @@ For logging config, see [zerolog](https://github.com/rs/zerolog)
 - [x] graceful shutdown
 - [x] enable discovery
 - [ ] health monitoring
+- [ ] ping pong
 - [x] documentation

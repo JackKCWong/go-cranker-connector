@@ -26,11 +26,12 @@ func main() {
 	serviceURL := os.Args[3]
 
 	conn := connector.Connector{
-		ServiceName:       serviceName,
-		ServiceURL:        serviceURL,
-		WSSHttpClient:     &http.Client{Transport: &http.Transport{TLSClientConfig: tlsSkipVerify}},
-		ServiceHttpClient: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsSkipVerify}},
-		ShutdownTimeout:   5 * time.Second,
+		ServiceName:         serviceName,
+		ServiceURL:          serviceURL,
+		WSSHttpClient:       &http.Client{Transport: &http.Transport{TLSClientConfig: tlsSkipVerify}},
+		ServiceHttpClient:   &http.Client{Transport: &http.Transport{TLSClientConfig: tlsSkipVerify}},
+		ShutdownTimeout:     5 * time.Second,
+		RediscoveryInterval: 5 * time.Second,
 	}
 
 	c := make(chan os.Signal)
@@ -45,13 +46,17 @@ func main() {
 		log.Info().Msg("shutdown finished")
 	}()
 
+	crankers := strings.Split(crankerWss, ",")
+	urls := make([]string, len(crankers))
+	for i, wss := range crankers {
+		urls[i] = fmt.Sprintf("%s/%s", wss, "register")
+	}
+
+	idx := 0
 	err := conn.Connect(func() []string {
-		crankers := strings.Split(crankerWss, ",")
-		urls := make([]string, len(crankers))
-		for i, wss := range crankers {
-			urls[i] = fmt.Sprintf("%s/%s", wss, "register")
-		}
-		return urls
+		// for demo purpose, it swings between crankers.
+		idx++
+		return []string{urls[idx%len(urls)]}
 	}, 2)
 
 	if err != nil {
