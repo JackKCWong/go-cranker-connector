@@ -45,7 +45,6 @@ func (wss *WSSConnector) ConnectAndServe() error {
 	defer terminate()
 	wss.terminate = terminate
 	wss.wg = &sync.WaitGroup{}
-	var err error
 
 	for {
 		select {
@@ -53,7 +52,7 @@ func (wss *WSSConnector) ConnectAndServe() error {
 			wss.log.Info().Msg("terminating...")
 			return sigTerm.Err()
 		default:
-			err = sem.Acquire(sigTerm, 1)
+			err := sem.Acquire(sigTerm, 1)
 			if err != nil {
 				return err
 			}
@@ -62,14 +61,14 @@ func (wss *WSSConnector) ConnectAndServe() error {
 			go func() {
 				defer wss.wg.Done()
 
-				var s *WssWorker = &WssWorker{
+				var worker *WssWorker = &WssWorker{
 					ServiceName:     wss.ServiceName,
 					RegisterURL:     wss.RegisterURL,
 					ServiceURL:      wss.ServiceURL,
 					ShutdownTimeout: wss.ShutdownTimeout,
 				}
 
-				err = s.Dial(sigTerm, wss.WSSHttpClient)
+				err := worker.Dial(sigTerm, wss.WSSHttpClient)
 				if err != nil {
 					wss.log.Err(err).Msg("failed to dial")
 					return
@@ -77,7 +76,7 @@ func (wss *WSSConnector) ConnectAndServe() error {
 
 				buf := rawBuffers.Get().([]byte)
 				defer rawBuffers.Put(buf)
-				err = s.Serve(sigTerm, sem, wss.ServiceHttpClient, buf)
+				err = worker.Serve(sigTerm, sem, wss.ServiceHttpClient, buf)
 				if err != nil {
 					wss.log.Err(err).Msg("failed to serve")
 					return
