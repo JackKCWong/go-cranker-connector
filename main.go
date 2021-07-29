@@ -3,7 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
-	"github.com/JackKCWong/go-cranker-connector/pkg/connector/v2"
+	"github.com/JackKCWong/go-cranker-connector/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"net/http"
