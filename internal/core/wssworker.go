@@ -252,9 +252,14 @@ func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, clie
 			<-time.After(1 * time.Minute)
 			err := conn.Ping(sigTerm)
 			if err != nil {
-				w.log.Err(err).Msg("error during ping/pong")
+				if strings.Contains(err.Error(), "response finished") {
+					// normal closure, do nothing.
+					return
+				}
+
 				// at this point I THINK the connection is dead and closed, so the conn.Reader should have returned with error.
 				// but I haven't tested.
+				w.log.Err(err).Msg("error during ping/pong")
 				err := conn.Close(websocket.StatusAbnormalClosure, "no response to ping")
 				if err != nil {
 					w.log.Err(err).Msg("error closing wss connection")
