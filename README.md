@@ -14,7 +14,7 @@ go get github.com/JackKCWong/go-cranker-connector
 
 ```go
 import	(
-	"github.com/JackKCWong/go-cranker-connector/pkg/connector/v2"
+	"github.com/JackKCWong/go-cranker-connector/connector"
 )
 ...
 
