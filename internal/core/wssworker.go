@@ -110,6 +110,28 @@ func (w *WssWorker) Dial(sigTerm context.Context, hc *http.Client) error {
 
 	w.conn = conn.(*websocket.Conn)
 
+	go func(conn *websocket.Conn) {
+		for {
+			<-time.After(1 * time.Minute)
+			err := conn.Ping(sigTerm)
+			if err != nil {
+				if strings.Contains(err.Error(), "response finished") {
+					// normal closure, do nothing.
+					return
+				}
+
+				// at this point I THINK the connection is dead and closed, so the conn.Reader should have returned with error.
+				// but I haven't tested.
+				w.log.Err(err).Msg("error during ping/pong")
+				err := conn.Close(websocket.StatusAbnormalClosure, "no response to ping")
+				if err != nil {
+					w.log.Err(err).Msg("error closing wss connection")
+				}
+				return
+			}
+		}
+	}(w.conn)
+
 	return nil
 }
 
@@ -247,30 +269,7 @@ func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, clie
 		}
 	}(w.conn)
 
-	go func(conn *websocket.Conn) {
-		for {
-			<-time.After(1 * time.Minute)
-			err := conn.Ping(sigTerm)
-			if err != nil {
-				if strings.Contains(err.Error(), "response finished") {
-					// normal closure, do nothing.
-					return
-				}
-
-				// at this point I THINK the connection is dead and closed, so the conn.Reader should have returned with error.
-				// but I haven't tested.
-				w.log.Err(err).Msg("error during ping/pong")
-				err := conn.Close(websocket.StatusAbnormalClosure, "no response to ping")
-				if err != nil {
-					w.log.Err(err).Msg("error closing wss connection")
-				}
-				return
-			}
-		}
-	}(w.conn)
-
-	w.log.Info().
-		Msg("waiting for request")
+	w.log.Info().Msg("waiting for request")
 
 	req, err := w.nextRequest(sigTerm, buf)
 	sem.Release(1)
