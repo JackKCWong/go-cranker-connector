@@ -13,6 +13,7 @@ import (
 
 type Discoverer func() []string
 
+// Connector connects to a set of crankers
 type Connector struct {
 	// ServiceName is registered to cranker to prefix the url under cranker. e.g. hello-world is accessible via /hello-world
 	ServiceName string
@@ -29,14 +30,13 @@ type Connector struct {
 	// A zero value means never rediscover beyond the first time.
 	RediscoveryInterval time.Duration
 	m                   sync.Mutex
-	children            *sync.Map
+	crankers            *sync.Map
 	log                 zerolog.Logger
 }
 
 func (c *Connector) Connect(crankerDiscoverer Discoverer, slidingWindow int8) error {
 	c.m.Lock()
-
-	c.children = &sync.Map{}
+	c.crankers = &sync.Map{}
 
 	if c.ServiceURL == "" {
 		return errors.New("requires ServiceURL")
@@ -76,15 +76,15 @@ func (c *Connector) Connect(crankerDiscoverer Discoverer, slidingWindow int8) er
 			var latest map[string]bool = make(map[string]bool)
 			for _, url := range urls {
 				latest[url] = true
-				_, exist := c.children.Load(url)
+				_, exist := c.crankers.Load(url)
 				if !exist {
 					crankerDiscoverChan <- url
 				}
 			}
 
-			c.children.Range(func(existing, wss interface{}) bool {
+			c.crankers.Range(func(existing, wss interface{}) bool {
 				if !latest[existing.(string)] {
-					c.children.Delete(existing)
+					c.crankers.Delete(existing)
 					go wss.(*core.WSSConnector).Shutdown()
 				}
 
@@ -113,7 +113,7 @@ func (c *Connector) Connect(crankerDiscoverer Discoverer, slidingWindow int8) er
 				ServiceHttpClient: c.ServiceHttpClient,
 			}
 
-			c.children.Store(wss.RegisterURL, wss)
+			c.crankers.Store(wss.RegisterURL, wss)
 
 			go func() {
 				err := wss.ConnectAndServe()
@@ -146,7 +146,7 @@ func (c *Connector) Shutdown() {
 	defer c.m.Unlock()
 
 	wg := &sync.WaitGroup{}
-	c.children.Range(func(_, wss interface{}) bool {
+	c.crankers.Range(func(_, wss interface{}) bool {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
