@@ -19,10 +19,16 @@ import (
 	"net/url"
 	"nhooyr.io/websocket"
 	"strings"
+	"sync"
 	"time"
 )
 
 var buffers *pools.BufferPool = pools.NewBufferPool()
+var raw8kBuffers *sync.Pool = &sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 8*1024)
+	},
+}
 
 type WssWorker struct {
 	ID              string
@@ -184,7 +190,7 @@ func (w *WssWorker) nextRequest(sigTerm context.Context, buf []byte) (*http.Requ
 		w.log.Debug().Msg("request with body")
 		in, out := io.Pipe()
 		req.Body = in
-		go w.pumpRequestBody(sigKill, out, buf)
+		go w.pumpRequestBody(sigKill, out)
 	} else {
 		w.log.Error().Bytes("marker", marker).Msg("unexpected marker")
 		return nil, errors.New("UnexpectedMarker")
@@ -193,7 +199,10 @@ func (w *WssWorker) nextRequest(sigTerm context.Context, buf []byte) (*http.Requ
 	return req.WithContext(sigKill), nil
 }
 
-func (w *WssWorker) pumpRequestBody(ctx context.Context, out *io.PipeWriter, buf []byte) {
+func (w *WssWorker) pumpRequestBody(ctx context.Context, out *io.PipeWriter) {
+	buf := raw8kBuffers.Get().([]byte)
+	defer raw8kBuffers.Put(buf)
+
 	for {
 		w.log.Debug().Msg("draining request body")
 		messageType, message, err := w.conn.Reader(ctx)
@@ -248,7 +257,10 @@ func (w *WssWorker) pumpRequestBody(ctx context.Context, out *io.PipeWriter, buf
 	}
 }
 
-func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, client *http.Client, buf []byte) (retErr error) {
+func (w *WssWorker) Serve(sigTerm context.Context, sem *semaphore.Weighted, client *http.Client) (retErr error) {
+	buf := raw8kBuffers.Get().([]byte)
+	defer raw8kBuffers.Put(buf)
+
 	defer func(conn *websocket.Conn) {
 		if retErr == nil {
 			w.log.Info().Msg("wss connection closed after response finished")

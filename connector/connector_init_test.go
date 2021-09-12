@@ -63,7 +63,7 @@ func setup() {
 
 	crankerURL = os.Getenv("CRANKER_TEST_URL")
 	if crankerURL == "" {
-		crankerURL = "https://localhost:8442"
+		crankerURL = "https://localhost:8443"
 	}
 
 	testServiceName = os.Getenv("CRANKER_TEST_SERVICE")
@@ -86,7 +86,7 @@ func setup() {
 	err := connector.Connect(func() []string {
 		crankerWSS := os.Getenv("CRANKER_TEST_WSS_URL")
 		if crankerWSS == "" {
-			crankerWSS = "wss://localhost:16488/register"
+			crankerWSS = "wss://localhost:16489/register"
 		}
 
 		return []string{crankerWSS}
@@ -96,7 +96,7 @@ func setup() {
 		panic(err)
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 }
 
 func testEndpoint(path string) string {

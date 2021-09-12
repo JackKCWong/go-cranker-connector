@@ -10,12 +10,6 @@ import (
 	"time"
 )
 
-var rawBuffers *sync.Pool = &sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 8*1024)
-	},
-}
-
 // WSSConnector connects to a single cranker wss url.
 type WSSConnector struct {
 	ServiceName       string
@@ -74,9 +68,7 @@ func (wss *WSSConnector) ConnectAndServe() error {
 					return
 				}
 
-				buf := rawBuffers.Get().([]byte)
-				defer rawBuffers.Put(buf)
-				err = worker.Serve(sigTerm, sem, wss.ServiceHttpClient, buf)
+				err = worker.Serve(sigTerm, sem, wss.ServiceHttpClient)
 				if err != nil {
 					wss.log.Err(err).Msg("failed to serve")
 					return

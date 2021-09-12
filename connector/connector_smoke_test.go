@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"testing"
@@ -67,7 +68,8 @@ func TestCanHandlePostRequest(t *testing.T) {
 	binResp := HttpBinResp{}
 	err = json.Unmarshal(body, &binResp)
 
-	expect.Nilf(err, "not a valid httpbin response")
+	fmt.Println(string(body))
+	expect.Nilf(err, "not a valid httpbin response: %q, %s", err, body)
 	expect.Equal("hello world", binResp.Data)
 }
 
